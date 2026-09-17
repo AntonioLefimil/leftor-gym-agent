@@ -1,0 +1,14 @@
+{
+  "name": "leftor-gym-agent",
+  "version": "1.0.0",
+  "description": "LefTor Sport Gym — Windows Reception Agent (Hardware & Turnstile Bridge)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.5"
+  }
+}

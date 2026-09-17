@@ -1,0 +1,16 @@
+{
+  "molinete": {
+    "ip": "192.168.1.201",
+    "puerto": 4370,
+    "timeoutMs": 3000
+  },
+  "servidor": {
+    "url": "https://api.leftorsport.cl",
+    "wsNamespace": "/agent",
+    "apiKey": "dev_agent_api_key_local"
+  },
+  "offline": {
+    "cachePath": "./data/cache.json",
+    "toleranciaDiasVencida": 0
+  }
+}

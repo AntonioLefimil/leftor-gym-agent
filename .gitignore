@@ -1,0 +1,7 @@
+node_modules/
+data/
+logs/
+*.zip
+*.log
+nssm.exe
+.DS_Store
