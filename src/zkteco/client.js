@@ -22,23 +22,40 @@ class ZKTecoClient extends EventEmitter {
     });
 
     this.client.on('data', (data) => {
-      const text = data.toString().trim();
-      console.log(`[ZKTeco Client] Datos recibidos del molinete:`, text);
+      const rawLines = data.toString().split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
+      for (const line of rawLines) {
+        console.log(`[ZKTeco Client] Datos recibidos del molinete:`, line);
 
-      // Si el molinete envía JSON (como el simulador o firmware reciente)
-      try {
-        const parsed = JSON.parse(text);
-        if (parsed.event === 'VERIFY' || parsed.userId) {
-          this.emit('verify', parsed.userId, parsed.timestamp);
-          return;
+        // 1. Si el molinete o simulador envía JSON
+        try {
+          const parsed = JSON.parse(line);
+          const userId = parsed.userId || parsed.zkId || parsed.id || parsed.user_id;
+          if (userId) {
+            this.emit('verify', String(userId).trim(), parsed.timestamp || new Date().toISOString());
+            continue;
+          }
+        } catch {
+          // Continuar con parsers de texto plano
         }
-      } catch {
-        // Si es texto plano (protocolo legacy)
-        if (text.startsWith('VERIFY:')) {
-          const parts = text.split(':');
-          const userId = parts[1];
-          this.emit('verify', userId, new Date().toISOString());
-          return;
+
+        // 2. Si es formato con prefijo (VERIFY:, USER:, CARD:, ID:)
+        const prefixMatch = line.match(/^(?:VERIFY|USER|CARD|ID|UID):(.*)$/i);
+        if (prefixMatch) {
+          const userId = prefixMatch[1].trim();
+          if (userId) {
+            this.emit('verify', userId, new Date().toISOString());
+            continue;
+          }
+        }
+
+        // 3. Ignorar respuestas de comandos internos como ACK:OPEN, ACK:DENY, etc.
+        if (line.startsWith('ACK:') || line.startsWith('OK') || line === 'PONG') {
+          continue;
+        }
+
+        // 4. Si es un ID alfanumérico directo (código de barra, QR o tarjeta RFID directa)
+        if (/^[a-zA-Z0-9_-]{2,30}$/.test(line)) {
+          this.emit('verify', line, new Date().toISOString());
         }
       }
     });
@@ -72,14 +89,14 @@ class ZKTecoClient extends EventEmitter {
       return false;
     }
     console.log(`[ZKTeco Client] 🔓 Enviando comando OPEN al molinete...`);
-    this.client.write('OPEN\n');
+    this.client.write('OPEN\r\n');
     return true;
   }
 
   denegarAcceso() {
     if (!this.isConnected || !this.client) return false;
     console.log(`[ZKTeco Client] ⛔ Enviando comando DENY al molinete...`);
-    this.client.write('DENY\n');
+    this.client.write('DENY\r\n');
     return true;
   }
 }

@@ -1,0 +1,34 @@
+====================================================================
+      LEFTOR SPORT GYM - AGENTE DE RECEPCION (TOTEM / MOLINETE)
+====================================================================
+
+INSTRUCCIONES RAPIDAS PARA MAC:
+
+1. COPIAR CARPETA:
+   Puedes dejar esta carpeta en tu usuario o Aplicaciones, ej:
+   ~/LefTorGym  o  /Applications/LefTorGym
+
+2. VERIFICAR NODE.JS:
+   Abre Terminal y escribe: node -v
+   Si no lo tienes, descárgalo gratis en: https://nodejs.org (.pkg para macOS)
+
+3. CONFIGURAR LA IP DEL MOLINETE:
+   Abre con TextEdit el archivo "config.json" y revisa que la
+   dirección "ip" sea la misma que tiene el molinete/tótem en su pantalla.
+
+4. PROBAR CONEXION:
+   Haz doble clic sobre: "probar-conexion.command"
+   Debe mostrarte [OK] en la conexión con el tótem y con el servidor.
+
+5. PROBAR FUNCIONAMIENTO EN VIVO:
+   Haz doble clic sobre: "iniciar-agente.command"
+   Se abrirá una ventana que te dirá si se conectó. Pasa una persona
+   por el tótem y verifica que abra el molinete.
+
+6. DEJAR INSTALADO DEFINITIVAMENTE:
+   Haz doble clic sobre: "instalar-servicio-mac.command"
+   Listo! Arrancará solo en segundo plano cada vez que prendas el Mac.
+
+Para ver todos los detalles y solución de dudas, abre:
+GUIA_INSTALACION_MAC.md
+====================================================================

@@ -59,13 +59,33 @@ class GatewayClient extends EventEmitter {
         return resolve({ online: false });
       }
 
+      let settled = false;
       const timeout = setTimeout(() => {
-        resolve({ online: false, timeout: true });
+        if (!settled) {
+          settled = true;
+          if (this.socket) this.socket.off('accessResponse', onAccessResponse);
+          resolve({ online: false, timeout: true });
+        }
       }, 2500);
 
-      this.socket.emit('accessAttempt', { zkId, timestamp: new Date().toISOString() }, (res) => {
-        clearTimeout(timeout);
-        resolve({ online: true, ...res });
+      const onAccessResponse = (res) => {
+        if (!settled && res && (res.zkId === zkId || !res.zkId)) {
+          settled = true;
+          clearTimeout(timeout);
+          if (this.socket) this.socket.off('accessResponse', onAccessResponse);
+          resolve({ online: true, ...res });
+        }
+      };
+
+      this.socket.on('accessResponse', onAccessResponse);
+
+      this.socket.emit('accessRequest', { zkId, timestamp: new Date().toISOString() }, (ackRes) => {
+        if (!settled && ackRes) {
+          settled = true;
+          clearTimeout(timeout);
+          if (this.socket) this.socket.off('accessResponse', onAccessResponse);
+          resolve({ online: true, ...ackRes });
+        }
       });
     });
   }
