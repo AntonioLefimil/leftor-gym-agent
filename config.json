@@ -1,11 +1,11 @@
 {
   "molinete": {
-    "ip": "192.168.1.201",
-    "puerto": 4370,
+    "ip": "192.168.0.100",
+    "puerto": 80,
     "timeoutMs": 3000
   },
   "servidor": {
-    "url": "https://api.leftorsport.cl",
+    "url": "https://leftor-gym-app.onrender.com",
     "wsNamespace": "/agent",
     "apiKey": "dev_agent_api_key_local"
   },

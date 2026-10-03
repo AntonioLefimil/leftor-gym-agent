@@ -94,6 +94,346 @@ var require_client = __commonJS({
   }
 });
 
+// src/controlid/client.js
+var require_client2 = __commonJS({
+  "src/controlid/client.js"(exports2, module2) {
+    var http = require("http");
+    var EventEmitter = require("events");
+    var ControlIDClient2 = class extends EventEmitter {
+      constructor(config2 = {}) {
+        super();
+        this.ip = config2.ip || "192.168.0.100";
+        this.port = config2.puerto || 80;
+        this.user = config2.user || "admin";
+        this.password = config2.password || "admin";
+        this.session = null;
+        this.isConnected = false;
+        this.pollInterval = null;
+        this.lastLogId = null;
+        this.isPolling = false;
+      }
+      // ─── Petición HTTP auxiliar ─────────────────────────────────
+      async _request(path2, method = "POST", data = null) {
+        return new Promise((resolve, reject) => {
+          const payload = data ? JSON.stringify(data) : "{}";
+          const options = {
+            hostname: this.ip,
+            port: this.port,
+            path: path2,
+            method,
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Length": Buffer.byteLength(payload)
+            },
+            timeout: 4e3
+          };
+          const req = http.request(options, (res) => {
+            let body = "";
+            res.on("data", (chunk) => body += chunk);
+            res.on("end", () => {
+              try {
+                const parsed = JSON.parse(body || "{}");
+                resolve({ status: res.statusCode, data: parsed });
+              } catch (e) {
+                resolve({ status: res.statusCode, raw: body });
+              }
+            });
+          });
+          req.on("error", (err) => reject(err));
+          req.on("timeout", () => {
+            req.destroy();
+            reject(new Error("Timeout de conexi\xF3n a Control iD"));
+          });
+          req.write(payload);
+          req.end();
+        });
+      }
+      // ─── Iniciar Sesión ─────────────────────────────────────────
+      async login() {
+        var _a2;
+        try {
+          const res = await this._request("/login.fcgi", "POST", {
+            login: this.user,
+            password: this.password
+          });
+          if (res.data && res.data.session) {
+            this.session = res.data.session;
+            return this.session;
+          }
+          throw new Error(((_a2 = res.data) == null ? void 0 : _a2.error) || "No se obtuvo sesi\xF3n en login.fcgi");
+        } catch (e) {
+          this.session = null;
+          throw e;
+        }
+      }
+      // ─── Conectar y Monitorear ──────────────────────────────────
+      async conectar() {
+        console.log(`[Control iD] Conectando a terminal en http://${this.ip}:${this.port}...`);
+        try {
+          await this.login();
+          this.isConnected = true;
+          console.log(`[Control iD] \u2705 Conectado con \xE9xito a terminal iDFace en http://${this.ip}:${this.port}`);
+          this.emit("connected");
+          await this._inicializarUltimoLog();
+          this._iniciarSondeo();
+        } catch (err) {
+          this.isConnected = false;
+          console.error(`[Control iD] \u274C Error conectando a terminal:`, err.message);
+          this.emit("disconnected");
+          setTimeout(() => this.conectar(), 5e3);
+        }
+      }
+      async _inicializarUltimoLog() {
+        try {
+          const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "access_logs",
+            order: ["time", "descending"],
+            limit: 1
+          });
+          if (res.data && res.data.access_logs && res.data.access_logs.length > 0) {
+            this.lastLogId = res.data.access_logs[0].id;
+            console.log(`[Control iD] \u{1F4CB} \xDAltimo log registrado en el t\xF3tem: ID #${this.lastLogId}`);
+          }
+        } catch (e) {
+          console.warn(`[Control iD] Aviso al obtener \xFAltimo log inicial:`, e.message);
+        }
+      }
+      _iniciarSondeo() {
+        if (this.pollInterval) clearInterval(this.pollInterval);
+        this.pollInterval = setInterval(() => this._pollNuevosLogs(), 1e3);
+        if (this.userPollInterval) clearInterval(this.userPollInterval);
+        this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 1e4);
+      }
+      async _pollNuevosUsuarios() {
+        var _a2;
+        if (!this.isConnected || !this.session) return;
+        try {
+          const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "users"
+          });
+          const users = ((_a2 = res.data) == null ? void 0 : _a2.users) || [];
+          if (this.lastKnownUserCount === void 0) {
+            this.lastKnownUserCount = users.length;
+            return;
+          }
+          if (users.length !== this.lastKnownUserCount) {
+            console.log(`[Control iD] \u{1F195} Cambio detectado en usuarios del t\xF3tem (${this.lastKnownUserCount} -> ${users.length}). Emitiendo evento...`);
+            this.lastKnownUserCount = users.length;
+            this.emit("usersChanged", users);
+          }
+        } catch (e) {
+        }
+      }
+      async _pollNuevosLogs() {
+        var _a2;
+        if (this.isPolling || !this.isConnected) return;
+        this.isPolling = true;
+        try {
+          const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "access_logs",
+            order: ["time", "descending"],
+            limit: 5
+          });
+          if (res.data && res.data.error === "Invalid session") {
+            console.log("[Control iD] Sesi\xF3n expirada, renovando login...");
+            await this.login();
+            this.isPolling = false;
+            return;
+          }
+          const logs = ((_a2 = res.data) == null ? void 0 : _a2.access_logs) || [];
+          if (logs.length > 0) {
+            const nuevos = [];
+            for (const log of logs) {
+              if (this.lastLogId === null || log.id > this.lastLogId) {
+                nuevos.push(log);
+              } else {
+                break;
+              }
+            }
+            if (nuevos.length > 0) {
+              this.lastLogId = Math.max(...nuevos.map((l) => l.id));
+              nuevos.reverse().forEach((log) => {
+                const userId = String(log.user_id || log.card_value || "0");
+                const timestamp = new Date((log.time || Math.floor(Date.now() / 1e3)) * 1e3).toISOString();
+                console.log(`[Control iD] \u{1F514} Evento detectado: ID #${log.id} \u2014 Usuario ZK: ${userId} (evento: ${log.event})`);
+                this.emit("verify", userId, timestamp);
+              });
+            }
+          }
+        } catch (e) {
+        } finally {
+          this.isPolling = false;
+        }
+      }
+      // ─── Abrir Molinete / Relé ──────────────────────────────────
+      async abrirMolinete() {
+        console.log(`[Control iD] \u{1F513} Enviando comando de apertura al rel\xE9 del molinete (SecBox)...`);
+        try {
+          if (!this.session) await this.login();
+          const res = await this._request(`/execute_actions.fcgi?session=${this.session}`, "POST", {
+            actions: [
+              { action: "sec_box", parameters: "id=65793, reason=1" },
+              { action: "door", parameters: "door=1" }
+            ]
+          });
+          if (res.data && res.data.actions && res.data.actions.some((a) => a.status === "allowed")) {
+            console.log(`[Control iD] \u2705 Molinete destrabado con \xE9xito (Rel\xE9 SecBox activado)`);
+            return true;
+          } else {
+            console.warn(`[Control iD] \u26A0\uFE0F Respuesta de apertura:`, JSON.stringify(res.data));
+            return false;
+          }
+        } catch (e) {
+          console.error(`[Control iD] \u274C Error enviando apertura al molinete:`, e.message);
+          return false;
+        }
+      }
+      denegarAcceso() {
+        console.log(`[Control iD] \u26D4 Acceso no autorizado (no se activa rel\xE9)`);
+        return true;
+      }
+      // ─── Obtener Historial para Sincronización Masiva ────────────
+      async obtenerHistorialReciente(limite = 50) {
+        var _a2;
+        try {
+          if (!this.session) await this.login();
+          const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "access_logs",
+            order: ["time", "descending"],
+            limit: limite
+          });
+          const logs = ((_a2 = res.data) == null ? void 0 : _a2.access_logs) || [];
+          return logs.map((l) => ({
+            zkId: String(l.user_id || l.card_value || "0"),
+            timestamp: new Date(l.time * 1e3).toISOString()
+          }));
+        } catch (e) {
+          console.error(`[Control iD] Error obteniendo historial para sync:`, e.message);
+          return [];
+        }
+      }
+      // ─── Obtener Todos los Usuarios del Tótem ───────────────────
+      async obtenerUsuariosCompletos() {
+        var _a2;
+        try {
+          if (!this.session) await this.login();
+          const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "users"
+          });
+          return ((_a2 = res.data) == null ? void 0 : _a2.users) || [];
+        } catch (e) {
+          console.error(`[Control iD] Error obteniendo usuarios del t\xF3tem:`, e.message);
+          return [];
+        }
+      }
+      // ─── Crear o Actualizar Socio desde la Web en el Tótem ──────
+      async crearOActualizarUsuario(socio) {
+        var _a2, _b, _c, _d;
+        try {
+          if (!this.session) await this.login();
+          const nombreCompleto = `${socio.nombre || ""} ${socio.apellido || ""}`.trim() || "Socio";
+          const registration = socio.rut || "";
+          const ahoraSeg = Math.floor(Date.now() / 1e3);
+          let beginTime = ahoraSeg;
+          let endTime = socio.vencimiento ? Math.floor(new Date(socio.vencimiento).getTime() / 1e3) : ahoraSeg + 30 * 86400;
+          if (socio.estado === "INACTIVO" || socio.estado === "SUSPENDIDO") {
+            endTime = ahoraSeg - 1;
+          }
+          let userIdEnTotem = socio.zkId ? parseInt(socio.zkId) : null;
+          if (!userIdEnTotem && registration) {
+            const busqueda = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+              object: "users",
+              where: { users: { registration } }
+            });
+            if (((_b = (_a2 = busqueda.data) == null ? void 0 : _a2.users) == null ? void 0 : _b.length) > 0) {
+              userIdEnTotem = busqueda.data.users[0].id;
+            }
+          }
+          if (userIdEnTotem) {
+            console.log(`[Control iD] \u{1F504} Actualizando socio existente en t\xF3tem #${userIdEnTotem} (${nombreCompleto})...`);
+            await this._request(`/modify_objects.fcgi?session=${this.session}`, "POST", {
+              object: "users",
+              values: {
+                name: nombreCompleto,
+                registration,
+                begin_time: beginTime,
+                end_time: endTime
+              },
+              where: { users: { id: userIdEnTotem } }
+            });
+            console.log(`[Control iD] \u2705 Socio #${userIdEnTotem} actualizado en el t\xF3tem.`);
+            return { id: userIdEnTotem, updated: true };
+          } else {
+            console.log(`[Control iD] \u2795 Creando nuevo socio en el t\xF3tem: ${nombreCompleto} (RUT: ${registration})...`);
+            const crearRes = await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "users",
+              values: [
+                {
+                  name: nombreCompleto,
+                  registration,
+                  begin_time: beginTime,
+                  end_time: endTime
+                }
+              ]
+            });
+            const newId = (_d = (_c = crearRes.data) == null ? void 0 : _c.ids) == null ? void 0 : _d[0];
+            if (newId) {
+              await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+                object: "user_groups",
+                values: [{ user_id: newId, group_id: 1 }]
+              });
+              console.log(`[Control iD] \u2705 Socio #${newId} creado y habilitado en el molinete exitosamente.`);
+              return { id: newId, created: true };
+            }
+          }
+        } catch (e) {
+          console.error(`[Control iD] \u274C Error creando/actualizando socio en t\xF3tem:`, e.message);
+          return false;
+        }
+      }
+      // ─── Subir Foto Facial al Tótem ─────────────────────────────
+      async subirFotoFacial(userId, imageBuffer) {
+        try {
+          if (!this.session) await this.login();
+          const timestamp = Math.floor(Date.now() / 1e3);
+          const reqPath = `/user_set_image.fcgi?user_id=${userId}&timestamp=${timestamp}&match=0&session=${this.session}`;
+          return new Promise((resolve) => {
+            const options = {
+              hostname: this.ip,
+              port: this.port,
+              path: reqPath,
+              method: "POST",
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "Content-Length": imageBuffer.length
+              },
+              timeout: 6e3
+            };
+            const req = http.request(options, (res) => {
+              let body = "";
+              res.on("data", (chunk) => body += chunk);
+              res.on("end", () => {
+                console.log(`[Control iD] \u2705 Foto facial subida para socio #${userId}`);
+                resolve(true);
+              });
+            });
+            req.on("error", (err) => {
+              console.error(`[Control iD] \u274C Error subiendo foto facial:`, err.message);
+              resolve(false);
+            });
+            req.write(imageBuffer);
+            req.end();
+          });
+        } catch (e) {
+          console.error(`[Control iD] Error en subirFotoFacial:`, e.message);
+          return false;
+        }
+      }
+    };
+    module2.exports = ControlIDClient2;
+  }
+});
+
 // node_modules/xmlhttprequest-ssl/lib/XMLHttpRequest.js
 var require_XMLHttpRequest = __commonJS({
   "node_modules/xmlhttprequest-ssl/lib/XMLHttpRequest.js"(exports2, module2) {
@@ -925,8 +1265,8 @@ var require_globals_node = __commonJS({
       get cookies() {
         const now = Date.now();
         this._cookies.forEach((cookie, name) => {
-          var _a;
-          if (((_a = cookie.expires) === null || _a === void 0 ? void 0 : _a.getTime()) < now) {
+          var _a2;
+          if (((_a2 = cookie.expires) === null || _a2 === void 0 ? void 0 : _a2.getTime()) < now) {
             this._cookies.delete(name);
           }
         });
@@ -2105,7 +2445,7 @@ var require_polling_xhr = __commonJS({
        * @private
        */
       _create() {
-        var _a;
+        var _a2;
         const opts = (0, util_js_1.pick)(this._opts, "agent", "pfx", "key", "passphrase", "cert", "ca", "ciphers", "rejectUnauthorized", "autoUnref");
         opts.xdomain = !!this._opts.xd;
         const xhr = this._xhr = this.createRequest(opts);
@@ -2133,7 +2473,7 @@ var require_polling_xhr = __commonJS({
             xhr.setRequestHeader("Accept", "*/*");
           } catch (e) {
           }
-          (_a = this._opts.cookieJar) === null || _a === void 0 ? void 0 : _a.addCookies(xhr);
+          (_a2 = this._opts.cookieJar) === null || _a2 === void 0 ? void 0 : _a2.addCookies(xhr);
           if ("withCredentials" in xhr) {
             xhr.withCredentials = this._opts.withCredentials;
           }
@@ -2141,9 +2481,9 @@ var require_polling_xhr = __commonJS({
             xhr.timeout = this._opts.requestTimeout;
           }
           xhr.onreadystatechange = () => {
-            var _a2;
+            var _a3;
             if (xhr.readyState === 3) {
-              (_a2 = this._opts.cookieJar) === null || _a2 === void 0 ? void 0 : _a2.parseCookies(
+              (_a3 = this._opts.cookieJar) === null || _a3 === void 0 ? void 0 : _a3.parseCookies(
                 // @ts-ignore
                 xhr.getResponseHeader("set-cookie")
               );
@@ -2315,8 +2655,8 @@ var require_polling_xhr_node = __commonJS({
     var XMLHttpRequest2 = XMLHttpRequestModule.default || XMLHttpRequestModule;
     var XHR = class extends polling_xhr_js_1.BaseXHR {
       request(opts = {}) {
-        var _a;
-        Object.assign(opts, { xd: this.xd, cookieJar: (_a = this.socket) === null || _a === void 0 ? void 0 : _a._cookieJar }, this.opts);
+        var _a2;
+        Object.assign(opts, { xd: this.xd, cookieJar: (_a2 = this.socket) === null || _a2 === void 0 ? void 0 : _a2._cookieJar }, this.opts);
         return new polling_xhr_js_1.Request((opts2) => new XMLHttpRequest2(opts2), this.uri(), opts);
       }
     };
@@ -6169,8 +6509,8 @@ var require_websocket_node = __commonJS({
     var websocket_js_1 = require_websocket2();
     var WS = class extends websocket_js_1.BaseWS {
       createSocket(uri, protocols, opts) {
-        var _a;
-        if ((_a = this.socket) === null || _a === void 0 ? void 0 : _a._cookieJar) {
+        var _a2;
+        if ((_a2 = this.socket) === null || _a2 === void 0 ? void 0 : _a2._cookieJar) {
           opts.headers = opts.headers || {};
           opts.headers.cookie = typeof opts.headers.cookie === "string" ? [opts.headers.cookie] : opts.headers.cookie || [];
           for (const [name, cookie] of this.socket._cookieJar.cookies) {
@@ -6276,8 +6616,8 @@ var require_webtransport = __commonJS({
         }
       }
       doClose() {
-        var _a;
-        (_a = this._transport) === null || _a === void 0 ? void 0 : _a.close();
+        var _a2;
+        (_a2 = this._transport) === null || _a2 === void 0 ? void 0 : _a2.close();
       }
     };
     exports2.WT = WT;
@@ -7014,21 +7354,21 @@ var require_polling_fetch = __commonJS({
         });
       }
       _fetch(data) {
-        var _a;
+        var _a2;
         const isPost = data !== void 0;
         const headers = new Headers(this.opts.extraHeaders);
         if (isPost) {
           headers.set("content-type", "text/plain;charset=UTF-8");
         }
-        (_a = this.socket._cookieJar) === null || _a === void 0 ? void 0 : _a.appendCookies(headers);
+        (_a2 = this.socket._cookieJar) === null || _a2 === void 0 ? void 0 : _a2.appendCookies(headers);
         return fetch(this.uri(), {
           method: isPost ? "POST" : "GET",
           body: isPost ? data : null,
           headers,
           credentials: this.opts.withCredentials ? "include" : "omit"
         }).then((res) => {
-          var _a2;
-          (_a2 = this.socket._cookieJar) === null || _a2 === void 0 ? void 0 : _a2.parseCookies(res.headers.getSetCookie());
+          var _a3;
+          (_a3 = this.socket._cookieJar) === null || _a3 === void 0 ? void 0 : _a3.parseCookies(res.headers.getSetCookie());
           return res;
         });
       }
@@ -7770,7 +8110,7 @@ var require_socket2 = __commonJS({
        * @return self
        */
       emit(ev, ...args) {
-        var _a, _b, _c;
+        var _a2, _b, _c;
         if (RESERVED_EVENTS.hasOwnProperty(ev)) {
           throw new Error('"' + ev.toString() + '" is a reserved event name');
         }
@@ -7792,7 +8132,7 @@ var require_socket2 = __commonJS({
           this._registerAckCallback(id, ack);
           packet.id = id;
         }
-        const isTransportWritable = (_b = (_a = this.io.engine) === null || _a === void 0 ? void 0 : _a.transport) === null || _b === void 0 ? void 0 : _b.writable;
+        const isTransportWritable = (_b = (_a2 = this.io.engine) === null || _a2 === void 0 ? void 0 : _a2.transport) === null || _b === void 0 ? void 0 : _b.writable;
         const isConnected = this.connected && !((_c = this.io.engine) === null || _c === void 0 ? void 0 : _c._hasPingExpired());
         const discardPacket = this.flags.volatile && !isTransportWritable;
         if (discardPacket) {
@@ -7810,8 +8150,8 @@ var require_socket2 = __commonJS({
        * @private
        */
       _registerAckCallback(id, ack) {
-        var _a;
-        const timeout = (_a = this.flags.timeout) !== null && _a !== void 0 ? _a : this._opts.ackTimeout;
+        var _a2;
+        const timeout = (_a2 = this.flags.timeout) !== null && _a2 !== void 0 ? _a2 : this._opts.ackTimeout;
         if (timeout === void 0) {
           this.acks[id] = ack;
           return;
@@ -8499,7 +8839,7 @@ var require_manager = __commonJS({
     var debug = (0, debug_1.default)("socket.io-client:manager");
     var Manager = class extends component_emitter_1.Emitter {
       constructor(uri, opts) {
-        var _a;
+        var _a2;
         super();
         this.nsps = {};
         this.subs = [];
@@ -8515,7 +8855,7 @@ var require_manager = __commonJS({
         this.reconnectionAttempts(opts.reconnectionAttempts || Infinity);
         this.reconnectionDelay(opts.reconnectionDelay || 1e3);
         this.reconnectionDelayMax(opts.reconnectionDelayMax || 5e3);
-        this.randomizationFactor((_a = opts.randomizationFactor) !== null && _a !== void 0 ? _a : 0.5);
+        this.randomizationFactor((_a2 = opts.randomizationFactor) !== null && _a2 !== void 0 ? _a2 : 0.5);
         this.backoff = new backo2_js_1.Backoff({
           min: this.reconnectionDelay(),
           max: this.reconnectionDelayMax(),
@@ -8547,27 +8887,27 @@ var require_manager = __commonJS({
         return this;
       }
       reconnectionDelay(v) {
-        var _a;
+        var _a2;
         if (v === void 0)
           return this._reconnectionDelay;
         this._reconnectionDelay = v;
-        (_a = this.backoff) === null || _a === void 0 ? void 0 : _a.setMin(v);
+        (_a2 = this.backoff) === null || _a2 === void 0 ? void 0 : _a2.setMin(v);
         return this;
       }
       randomizationFactor(v) {
-        var _a;
+        var _a2;
         if (v === void 0)
           return this._randomizationFactor;
         this._randomizationFactor = v;
-        (_a = this.backoff) === null || _a === void 0 ? void 0 : _a.setJitter(v);
+        (_a2 = this.backoff) === null || _a2 === void 0 ? void 0 : _a2.setJitter(v);
         return this;
       }
       reconnectionDelayMax(v) {
-        var _a;
+        var _a2;
         if (v === void 0)
           return this._reconnectionDelayMax;
         this._reconnectionDelayMax = v;
-        (_a = this.backoff) === null || _a === void 0 ? void 0 : _a.setMax(v);
+        (_a2 = this.backoff) === null || _a2 === void 0 ? void 0 : _a2.setMax(v);
         return this;
       }
       timeout(v) {
@@ -8794,10 +9134,10 @@ var require_manager = __commonJS({
        * @private
        */
       onclose(reason, description) {
-        var _a;
+        var _a2;
         debug("closed due to %s", reason);
         this.cleanup();
-        (_a = this.engine) === null || _a === void 0 ? void 0 : _a.close();
+        (_a2 = this.engine) === null || _a2 === void 0 ? void 0 : _a2.close();
         this.backoff.reset();
         this._readyState = "closed";
         this.emitReserved("close", reason, description);
@@ -8995,6 +9335,10 @@ var require_gateway = __commonJS({
           console.log(`[Gateway] \u{1F513} Evento 'manualOpen' recibido desde el panel web`);
           this.emit("manualOpen", data);
         });
+        this.socket.on("freePassage", (data) => {
+          console.log(`[Gateway] \u23F1\uFE0F Evento 'freePassage' recibido desde el panel web:`, data);
+          this.emit("freePassage", data);
+        });
       }
       /**
        * Consulta al servidor si el socio tiene acceso permitido
@@ -9040,6 +9384,23 @@ var require_gateway = __commonJS({
         this.socket.emit("syncOfflineEvents", { records: eventos }, (ack) => {
           console.log(`[Gateway] \u2705 Sincronizaci\xF3n offline completada:`, ack);
         });
+      }
+      /**
+       * Envía la lista de usuarios del tótem a la base de datos central
+       */
+      sincronizarUsuariosTotem(usuarios) {
+        if (!this.isConnected || !this.socket || !usuarios || usuarios.length === 0) return;
+        console.log(`[Gateway] \u{1F504} Enviando ${usuarios.length} socios desde el t\xF3tem hacia la base de datos central...`);
+        this.socket.emit("syncTotemUsers", { users: usuarios }, (ack) => {
+          console.log(`[Gateway] \u2705 Sincronizaci\xF3n de socios en la base de datos completada:`, ack);
+        });
+      }
+      /**
+       * Notifica a la nube el ID de tótem (zkId) asignado a un socio
+       */
+      sincronizarZkId(socioId, zkId) {
+        if (!this.isConnected || !this.socket) return;
+        this.socket.emit("updateSocioZkId", { socioId, zkId });
       }
     };
     module2.exports = GatewayClient2;
@@ -9139,6 +9500,7 @@ var require_cache = __commonJS({
 var fs = require("fs");
 var path = require("path");
 var ZKTecoClient = require_client();
+var ControlIDClient = require_client2();
 var GatewayClient = require_gateway();
 var CacheManager = require_cache();
 var execDir = path.dirname(process.execPath);
@@ -9150,8 +9512,8 @@ var candidateConfigPaths = [
 ];
 var configPath = candidateConfigPaths.find((p) => fs.existsSync(p)) || candidateConfigPaths[0];
 var config = {
-  molinete: { ip: "192.168.1.201", puerto: 4370 },
-  servidor: { url: "https://api.leftorsport.cl", wsNamespace: "/agent", apiKey: "dev_agent_api_key_local" },
+  molinete: { ip: "192.168.0.100", puerto: 80 },
+  servidor: { url: "https://leftor-gym-app.onrender.com", wsNamespace: "/agent", apiKey: "dev_agent_api_key_local" },
   offline: { cachePath: path.resolve(process.cwd(), "data/cache.json") }
 };
 if (fs.existsSync(configPath)) {
@@ -9168,9 +9530,9 @@ if (fs.existsSync(configPath)) {
 if (config.offline && config.offline.cachePath && !path.isAbsolute(config.offline.cachePath)) {
   config.offline.cachePath = path.resolve(process.cwd(), config.offline.cachePath);
 }
-var molineteIp = config.molinete && config.molinete.ip || "192.168.1.201";
-var molinetePuerto = config.molinete && config.molinete.puerto || 4370;
-var servidorUrl = config.servidor && config.servidor.url || "https://api.leftorsport.cl";
+var molineteIp = config.molinete && config.molinete.ip || "192.168.0.100";
+var molinetePuerto = config.molinete && config.molinete.puerto || 80;
+var servidorUrl = config.servidor && config.servidor.url || "https://leftor-gym-app.onrender.com";
 var wsNamespace = config.servidor && config.servidor.wsNamespace || "";
 var cachePath = config.offline && config.offline.cachePath || path.resolve(process.cwd(), "data/cache.json");
 console.log("====================================================");
@@ -9181,27 +9543,76 @@ console.log(`[Setup] Servidor:    ${servidorUrl}${wsNamespace}`);
 console.log(`[Setup] Base Cach\xE9:  ${cachePath}`);
 console.log("----------------------------------------------------\n");
 var cache = new CacheManager(cachePath);
-var zkteco = new ZKTecoClient(config.molinete || {});
+var _a;
+var isControlID = molinetePuerto === 80 || ((_a = config.molinete) == null ? void 0 : _a.tipo) === "controlid";
+var hardwareClient = isControlID ? new ControlIDClient(config.molinete || {}) : new ZKTecoClient(config.molinete || {});
 var gateway = new GatewayClient(config.servidor || {});
-gateway.on("connected", () => {
-  console.log("[Main] Sincronizando pendientes offline si existen...");
+gateway.on("connected", async () => {
+  console.log("[Main] \u2705 Conectado a la nube. Iniciando sincronizaci\xF3n...");
   const pendientes = cache.obtenerPendientes();
   if (pendientes.length > 0) {
     gateway.sincronizarOffline(pendientes);
     cache.limpiarPendientes();
   }
+  if (typeof hardwareClient.obtenerUsuariosCompletos === "function") {
+    try {
+      console.log("[Main] \u{1F504} Extrayendo usuarios del t\xF3tem para sincronizar con la nube...");
+      const usuarios = await hardwareClient.obtenerUsuariosCompletos();
+      if (usuarios && usuarios.length > 0) {
+        gateway.sincronizarUsuariosTotem(usuarios);
+      }
+    } catch (e) {
+      console.warn("[Main] Aviso extrayendo usuarios del t\xF3tem:", e.message);
+    }
+  }
+  if (typeof hardwareClient.obtenerHistorialReciente === "function") {
+    try {
+      console.log("[Main] \u{1F504} Consultando accesos hist\xF3ricos del t\xF3tem para sincronizar...");
+      const historial = await hardwareClient.obtenerHistorialReciente(300);
+      if (historial && historial.length > 0) {
+        gateway.sincronizarOffline(historial);
+      }
+    } catch (e) {
+      console.warn("[Main] Aviso sincronizando historial del t\xF3tem:", e.message);
+    }
+  }
 });
-gateway.on("socioUpdated", (socio) => {
+hardwareClient.on("usersChanged", (usuarios) => {
+  console.log(`[Main] \u{1F504} Sincronizando ${usuarios.length} usuarios del t\xF3tem con la nube...`);
+  if (gateway.isConnected) {
+    gateway.sincronizarUsuariosTotem(usuarios);
+  }
+});
+gateway.on("socioUpdated", async (socio) => {
+  console.log(`[Main] \u{1F4E2} Notificaci\xF3n recibida: Socio ${socio.nombre} actualizado en la web`);
   cache.actualizarSocio(socio);
+  if (typeof hardwareClient.crearOActualizarUsuario === "function") {
+    const res = await hardwareClient.crearOActualizarUsuario(socio);
+    if (res && res.id && !socio.zkId) {
+      gateway.sincronizarZkId(socio.id, String(res.id));
+    }
+  }
 });
+var modoPasoLibreHasta = null;
 gateway.on("manualOpen", (data) => {
   console.log(`[Main] \u{1F513} Orden de apertura manual recibida desde recepci\xF3n/panel web`);
-  zkteco.abrirMolinete();
+  hardwareClient.abrirMolinete();
 });
-zkteco.on("verify", async (userId, timestamp) => {
+gateway.on("freePassage", (data) => {
+  const minutos = (data == null ? void 0 : data.duracionMinutos) || 15;
+  modoPasoLibreHasta = Date.now() + minutos * 60 * 1e3;
+  console.log(`[Main] \u23F1\uFE0F Modo Paso Libre activado por ${minutos} minutos (hasta ${new Date(modoPasoLibreHasta).toLocaleTimeString()})`);
+  hardwareClient.abrirMolinete();
+});
+hardwareClient.on("verify", async (userId, timestamp) => {
   console.log(`
 ----------------------------------------------------`);
   console.log(`\u{1F50D} [Lector Molinete] Verificaci\xF3n detectada para: ${userId}`);
+  if (modoPasoLibreHasta && Date.now() < modoPasoLibreHasta) {
+    console.log(`[Main] \u23F1\uFE0F Paso Libre Temporal activo \u2014 Destrabando torniquete sin restricciones`);
+    hardwareClient.abrirMolinete();
+    return;
+  }
   let accesoPermitido = false;
   let socioInfo = null;
   let validadoOnline = false;
@@ -9234,15 +9645,15 @@ zkteco.on("verify", async (userId, timestamp) => {
   const nombreDisplay = socioInfo && socioInfo.nombre ? socioInfo.nombre : userId;
   if (accesoPermitido) {
     console.log(`[Main] \u2705 ACCESO AUTORIZADO \u2014 ${nombreDisplay}`);
-    zkteco.abrirMolinete();
+    hardwareClient.abrirMolinete();
   } else {
     console.log(`[Main] \u274C ACCESO DENEGADO \u2014 ${nombreDisplay}`);
-    zkteco.denegarAcceso();
+    hardwareClient.denegarAcceso();
   }
   console.log(`----------------------------------------------------
 `);
 });
-zkteco.conectar();
+hardwareClient.conectar();
 gateway.conectar();
 /*! Bundled license information:
 

@@ -48,6 +48,11 @@ class GatewayClient extends EventEmitter {
       console.log(`[Gateway] 🔓 Evento 'manualOpen' recibido desde el panel web`);
       this.emit('manualOpen', data);
     });
+
+    this.socket.on('freePassage', (data) => {
+      console.log(`[Gateway] ⏱️ Evento 'freePassage' recibido desde el panel web:`, data);
+      this.emit('freePassage', data);
+    });
   }
 
   /**
@@ -99,6 +104,25 @@ class GatewayClient extends EventEmitter {
     this.socket.emit('syncOfflineEvents', { records: eventos }, (ack) => {
       console.log(`[Gateway] ✅ Sincronización offline completada:`, ack);
     });
+  }
+
+  /**
+   * Envía la lista de usuarios del tótem a la base de datos central
+   */
+  sincronizarUsuariosTotem(usuarios) {
+    if (!this.isConnected || !this.socket || !usuarios || usuarios.length === 0) return;
+    console.log(`[Gateway] 🔄 Enviando ${usuarios.length} socios desde el tótem hacia la base de datos central...`);
+    this.socket.emit('syncTotemUsers', { users: usuarios }, (ack) => {
+      console.log(`[Gateway] ✅ Sincronización de socios en la base de datos completada:`, ack);
+    });
+  }
+
+  /**
+   * Notifica a la nube el ID de tótem (zkId) asignado a un socio
+   */
+  sincronizarZkId(socioId, zkId) {
+    if (!this.isConnected || !this.socket) return;
+    this.socket.emit('updateSocioZkId', { socioId, zkId });
   }
 }
 
