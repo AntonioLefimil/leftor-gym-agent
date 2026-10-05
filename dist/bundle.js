@@ -9503,6 +9503,40 @@ var ZKTecoClient = require_client();
 var ControlIDClient = require_client2();
 var GatewayClient = require_gateway();
 var CacheManager = require_cache();
+var projectDir = fs.existsSync(path.resolve(process.cwd(), "config.json")) ? process.cwd() : path.resolve(__dirname, "..");
+var logsDir = path.resolve(projectDir, "logs");
+if (!fs.existsSync(logsDir)) {
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+  } catch (_) {
+  }
+}
+var logFilePath = path.join(logsDir, "agent.log");
+var logStream = fs.createWriteStream(logFilePath, { flags: "a" });
+function appendLog(level, args) {
+  const ts = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").substring(0, 19);
+  const text = args.map((arg) => typeof arg === "object" ? JSON.stringify(arg) : String(arg)).join(" ");
+  try {
+    logStream.write(`[${ts}] [${level}] ${text}
+`);
+  } catch (_) {
+  }
+}
+var _origLog = console.log;
+var _origWarn = console.warn;
+var _origError = console.error;
+console.log = (...args) => {
+  _origLog(...args);
+  appendLog("INFO", args);
+};
+console.warn = (...args) => {
+  _origWarn(...args);
+  appendLog("WARN", args);
+};
+console.error = (...args) => {
+  _origError(...args);
+  appendLog("ERROR", args);
+};
 var execDir = path.dirname(process.execPath);
 var candidateConfigPaths = [
   path.resolve(process.cwd(), "config.json"),
@@ -9541,6 +9575,7 @@ console.log("====================================================");
 console.log(`[Setup] Molinete IP: ${molineteIp}:${molinetePuerto}`);
 console.log(`[Setup] Servidor:    ${servidorUrl}${wsNamespace}`);
 console.log(`[Setup] Base Cach\xE9:  ${cachePath}`);
+console.log(`[Setup] Archivo Log: ${logFilePath}`);
 console.log("----------------------------------------------------\n");
 var cache = new CacheManager(cachePath);
 var _a;

@@ -5,6 +5,49 @@ const ControlIDClient = require('./controlid/client');
 const GatewayClient = require('./gateway');
 const CacheManager = require('./cache');
 
+// ─── Configurar Registro de Logs en Archivo (logs/agent.log) ──
+const projectDir = fs.existsSync(path.resolve(process.cwd(), 'config.json'))
+  ? process.cwd()
+  : path.resolve(__dirname, '..');
+const logsDir = path.resolve(projectDir, 'logs');
+if (!fs.existsSync(logsDir)) {
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+  } catch (_) {}
+}
+
+const logFilePath = path.join(logsDir, 'agent.log');
+const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+
+function appendLog(level, args) {
+  const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const text = args
+    .map((arg) => (typeof arg === 'object' ? JSON.stringify(arg) : String(arg)))
+    .join(' ');
+  try {
+    logStream.write(`[${ts}] [${level}] ${text}\n`);
+  } catch (_) {}
+}
+
+const _origLog = console.log;
+const _origWarn = console.warn;
+const _origError = console.error;
+
+console.log = (...args) => {
+  _origLog(...args);
+  appendLog('INFO', args);
+};
+
+console.warn = (...args) => {
+  _origWarn(...args);
+  appendLog('WARN', args);
+};
+
+console.error = (...args) => {
+  _origError(...args);
+  appendLog('ERROR', args);
+};
+
 // ─── Cargar Configuración ─────────────────────────────────────
 const execDir = path.dirname(process.execPath);
 const candidateConfigPaths = [
@@ -50,6 +93,7 @@ console.log('====================================================');
 console.log(`[Setup] Molinete IP: ${molineteIp}:${molinetePuerto}`);
 console.log(`[Setup] Servidor:    ${servidorUrl}${wsNamespace}`);
 console.log(`[Setup] Base Caché:  ${cachePath}`);
+console.log(`[Setup] Archivo Log: ${logFilePath}`);
 console.log('----------------------------------------------------\n');
 
 const cache = new CacheManager(cachePath);

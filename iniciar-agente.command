@@ -9,8 +9,12 @@ echo "===================================================================="
 echo "    🏋️   LefTor Sport Gym — Agente de Recepción (macOS)"
 echo "===================================================================="
 echo "[*] Directorio de ejecución: $DIR"
+echo "[*] Archivo de logs:        $DIR/logs/agent.log"
 echo "[*] Presiona Ctrl + C en cualquier momento para detenerlo."
 echo ""
+
+mkdir -p "$DIR/logs"
+mkdir -p "$DIR/data"
 
 # Buscar ejecutable de Node.js en rutas estándar de macOS
 NODE_BIN=""

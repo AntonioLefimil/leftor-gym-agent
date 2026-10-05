@@ -61,7 +61,7 @@ cat <<EOF > "$PLIST_PATH"
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>$DIR/logs/agent.log</string>
+    <string>$DIR/logs/service.log</string>
     <key>StandardErrorPath</key>
     <string>$DIR/logs/agent-error.log</string>
 </dict>
