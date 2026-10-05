@@ -130,12 +130,16 @@ gateway.on('connected', async () => {
     }
   }
 
-  // 3. Sincronizar historial de accesos del tótem con la base de datos central
-  if (typeof hardwareClient.obtenerHistorialReciente === 'function') {
+  // 3. Sincronizar historial completo de accesos del tótem con la base de datos central
+  if (typeof hardwareClient.obtenerHistorialCompleto === 'function' || typeof hardwareClient.obtenerHistorialReciente === 'function') {
     try {
-      console.log('[Main] 🔄 Consultando accesos históricos del tótem para sincronizar...');
-      const historial = await hardwareClient.obtenerHistorialReciente(300);
+      console.log('[Main] 🔄 Extrayendo historial completo de accesos del tótem para sincronizar con la nube...');
+      const fn = hardwareClient.obtenerHistorialCompleto
+        ? hardwareClient.obtenerHistorialCompleto.bind(hardwareClient)
+        : hardwareClient.obtenerHistorialReciente.bind(hardwareClient);
+      const historial = await fn();
       if (historial && historial.length > 0) {
+        console.log(`[Main] 📤 Enviando ${historial.length} eventos históricos del tótem a la base de datos central...`);
         gateway.sincronizarOffline(historial);
       }
     } catch (e) {

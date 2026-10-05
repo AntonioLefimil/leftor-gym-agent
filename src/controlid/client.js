@@ -226,25 +226,49 @@ class ControlIDClient extends EventEmitter {
     return true;
   }
 
-  // ─── Obtener Historial para Sincronización Masiva ────────────
-  async obtenerHistorialReciente(limite = 50) {
+  // ─── Obtener Historial Completo para Sincronización Masiva ────
+  async obtenerHistorialCompleto(maxTotal = 20000) {
     try {
       if (!this.session) await this.login();
-      const res = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
-        object: 'access_logs',
-        order: ['time', 'descending'],
-        limit: limite
-      });
+      const allLogs = [];
+      let offset = 0;
+      const batchSize = 500;
 
-      const logs = res.data?.access_logs || [];
-      return logs.map(l => ({
+      console.log(`[Control iD] 🔄 Extrayendo historial completo de accesos desde el tótem...`);
+
+      while (offset < maxTotal) {
+        const res = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'access_logs',
+          order: ['time', 'ascending'],
+          limit: batchSize,
+          offset: offset
+        });
+
+        const logs = res.data?.access_logs || [];
+        if (logs.length === 0) break;
+
+        allLogs.push(...logs);
+        offset += logs.length;
+        console.log(`[Control iD] 📥 Descargados ${allLogs.length} logs acumulados...`);
+
+        if (logs.length < batchSize) break;
+      }
+
+      console.log(`[Control iD] 📋 Total de eventos históricos extraídos del tótem: ${allLogs.length}`);
+      return allLogs.map(l => ({
+        logId: l.id,
         zkId: String(l.user_id || l.card_value || '0'),
+        event: l.event,
         timestamp: new Date(l.time * 1000).toISOString()
       }));
     } catch (e) {
-      console.error(`[Control iD] Error obteniendo historial para sync:`, e.message);
+      console.error(`[Control iD] Error obteniendo historial completo:`, e.message);
       return [];
     }
+  }
+
+  async obtenerHistorialReciente(limite = 50) {
+    return this.obtenerHistorialCompleto();
   }
 
   // ─── Obtener Todos los Usuarios del Tótem ───────────────────
@@ -379,6 +403,49 @@ class ControlIDClient extends EventEmitter {
     } catch (e) {
       console.error(`[Control iD] Error en subirFotoFacial:`, e.message);
       return false;
+    }
+  }
+
+  // ─── Obtener Foto Facial del Tótem ─────────────────────────
+  async obtenerFotoUsuario(userId) {
+    try {
+      if (!this.session) await this.login();
+      return new Promise((resolve) => {
+        const options = {
+          hostname: this.ip,
+          port: this.port,
+          path: `/user_get_image.fcgi?user_id=${userId}&session=${this.session}`,
+          method: 'GET',
+          timeout: 4000
+        };
+
+        const req = http.request(options, (res) => {
+          if (res.statusCode !== 200) {
+            resolve(null);
+            return;
+          }
+          const chunks = [];
+          res.on('data', chunk => chunks.push(chunk));
+          res.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            if (buffer.length > 500) {
+              const base64 = buffer.toString('base64');
+              resolve(`data:image/jpeg;base64,${base64}`);
+            } else {
+              resolve(null);
+            }
+          });
+        });
+
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => {
+          req.destroy();
+          resolve(null);
+        });
+        req.end();
+      });
+    } catch (e) {
+      return null;
     }
   }
 }

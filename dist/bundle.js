@@ -292,25 +292,43 @@ var require_client2 = __commonJS({
         console.log(`[Control iD] \u26D4 Acceso no autorizado (no se activa rel\xE9)`);
         return true;
       }
-      // ─── Obtener Historial para Sincronización Masiva ────────────
-      async obtenerHistorialReciente(limite = 50) {
+      // ─── Obtener Historial Completo para Sincronización Masiva ────
+      async obtenerHistorialCompleto(maxTotal = 2e4) {
         var _a2;
         try {
           if (!this.session) await this.login();
-          const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
-            object: "access_logs",
-            order: ["time", "descending"],
-            limit: limite
-          });
-          const logs = ((_a2 = res.data) == null ? void 0 : _a2.access_logs) || [];
-          return logs.map((l) => ({
+          const allLogs = [];
+          let offset = 0;
+          const batchSize = 500;
+          console.log(`[Control iD] \u{1F504} Extrayendo historial completo de accesos desde el t\xF3tem...`);
+          while (offset < maxTotal) {
+            const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+              object: "access_logs",
+              order: ["time", "ascending"],
+              limit: batchSize,
+              offset
+            });
+            const logs = ((_a2 = res.data) == null ? void 0 : _a2.access_logs) || [];
+            if (logs.length === 0) break;
+            allLogs.push(...logs);
+            offset += logs.length;
+            console.log(`[Control iD] \u{1F4E5} Descargados ${allLogs.length} logs acumulados...`);
+            if (logs.length < batchSize) break;
+          }
+          console.log(`[Control iD] \u{1F4CB} Total de eventos hist\xF3ricos extra\xEDdos del t\xF3tem: ${allLogs.length}`);
+          return allLogs.map((l) => ({
+            logId: l.id,
             zkId: String(l.user_id || l.card_value || "0"),
+            event: l.event,
             timestamp: new Date(l.time * 1e3).toISOString()
           }));
         } catch (e) {
-          console.error(`[Control iD] Error obteniendo historial para sync:`, e.message);
+          console.error(`[Control iD] Error obteniendo historial completo:`, e.message);
           return [];
         }
+      }
+      async obtenerHistorialReciente(limite = 50) {
+        return this.obtenerHistorialCompleto();
       }
       // ─── Obtener Todos los Usuarios del Tótem ───────────────────
       async obtenerUsuariosCompletos() {
@@ -427,6 +445,46 @@ var require_client2 = __commonJS({
         } catch (e) {
           console.error(`[Control iD] Error en subirFotoFacial:`, e.message);
           return false;
+        }
+      }
+      // ─── Obtener Foto Facial del Tótem ─────────────────────────
+      async obtenerFotoUsuario(userId) {
+        try {
+          if (!this.session) await this.login();
+          return new Promise((resolve) => {
+            const options = {
+              hostname: this.ip,
+              port: this.port,
+              path: `/user_get_image.fcgi?user_id=${userId}&session=${this.session}`,
+              method: "GET",
+              timeout: 4e3
+            };
+            const req = http.request(options, (res) => {
+              if (res.statusCode !== 200) {
+                resolve(null);
+                return;
+              }
+              const chunks = [];
+              res.on("data", (chunk) => chunks.push(chunk));
+              res.on("end", () => {
+                const buffer = Buffer.concat(chunks);
+                if (buffer.length > 500) {
+                  const base64 = buffer.toString("base64");
+                  resolve(`data:image/jpeg;base64,${base64}`);
+                } else {
+                  resolve(null);
+                }
+              });
+            });
+            req.on("error", () => resolve(null));
+            req.on("timeout", () => {
+              req.destroy();
+              resolve(null);
+            });
+            req.end();
+          });
+        } catch (e) {
+          return null;
         }
       }
     };
@@ -9600,11 +9658,13 @@ gateway.on("connected", async () => {
       console.warn("[Main] Aviso extrayendo usuarios del t\xF3tem:", e.message);
     }
   }
-  if (typeof hardwareClient.obtenerHistorialReciente === "function") {
+  if (typeof hardwareClient.obtenerHistorialCompleto === "function" || typeof hardwareClient.obtenerHistorialReciente === "function") {
     try {
-      console.log("[Main] \u{1F504} Consultando accesos hist\xF3ricos del t\xF3tem para sincronizar...");
-      const historial = await hardwareClient.obtenerHistorialReciente(300);
+      console.log("[Main] \u{1F504} Extrayendo historial completo de accesos del t\xF3tem para sincronizar con la nube...");
+      const fn = hardwareClient.obtenerHistorialCompleto ? hardwareClient.obtenerHistorialCompleto.bind(hardwareClient) : hardwareClient.obtenerHistorialReciente.bind(hardwareClient);
+      const historial = await fn();
       if (historial && historial.length > 0) {
+        console.log(`[Main] \u{1F4E4} Enviando ${historial.length} eventos hist\xF3ricos del t\xF3tem a la base de datos central...`);
         gateway.sincronizarOffline(historial);
       }
     } catch (e) {
