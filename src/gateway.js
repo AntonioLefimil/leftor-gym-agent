@@ -96,13 +96,42 @@ class GatewayClient extends EventEmitter {
   }
 
   /**
-   * Sincroniza eventos ocurridos durante una caída de internet
+   * Sincroniza eventos ocurridos durante una caída de internet o historial masivo
    */
   sincronizarOffline(eventos) {
-    if (!this.isConnected || !this.socket || !eventos || eventos.length === 0) return;
-    console.log(`[Gateway] Sincronizando ${eventos.length} eventos offline al servidor...`);
-    this.socket.emit('syncOfflineEvents', { records: eventos }, (ack) => {
-      console.log(`[Gateway] ✅ Sincronización offline completada:`, ack);
+    if (!this.isConnected || !this.socket || !eventos || eventos.length === 0) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      console.log(`[Gateway] Sincronizando ${eventos.length} eventos al servidor en la nube...`);
+
+      let terminado = false;
+      const timeout = setTimeout(() => {
+        if (!terminado) {
+          terminado = true;
+          this.socket.off('importHistoryResult', onResult);
+          console.warn(`[Gateway] Aviso: timeout esperando confirmación de sincronización.`);
+          resolve(null);
+        }
+      }, 30000);
+
+      const onResult = (res) => {
+        if (!terminado) {
+          terminado = true;
+          clearTimeout(timeout);
+          this.socket.off('importHistoryResult', onResult);
+          console.log(`[Gateway] ✅ Sincronización en la base de datos completada:`, res);
+          resolve(res);
+        }
+      };
+
+      this.socket.on('importHistoryResult', onResult);
+
+      // Emitir importHistory (soportado nativamente por el backend)
+      this.socket.emit('importHistory', { records: eventos }, (ack) => {
+        if (ack) onResult(ack);
+      });
+      this.socket.emit('syncOfflineEvents', { records: eventos });
     });
   }
 

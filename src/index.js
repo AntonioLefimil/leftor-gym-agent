@@ -132,28 +132,33 @@ gateway.on('connected', async () => {
 
   // 3. Sincronización de accesos: Carga Inicial Completa vs Delta Incremental
   const syncState = cache.getSyncState();
-  if (!syncState.historicoCompletado) {
-    console.log('[Main] ⏳ Primera sincronización detectada: extrayendo historial completo de memoria del tótem...');
+  if (!syncState.historicoConfirmadoPorServidor) {
+    console.log('[Main] ⏳ Sincronización histórica del historial de accesos...');
     try {
       const historial = await hardwareClient.obtenerHistorialCompleto();
       if (historial && historial.length > 0) {
         console.log(`[Main] 📤 Enviando ${historial.length} eventos históricos del tótem a la base de datos central...`);
-        gateway.sincronizarOffline(historial);
+        const res = await gateway.sincronizarOffline(historial);
         const maxId = Math.max(...historial.map(h => h.logId || 0));
-        cache.setSyncState({ historicoCompletado: true, ultimoLogId: maxId });
-        console.log(`[Main] ✅ Sincronización histórica inicial completada y fijada en ID #${maxId}`);
+        cache.setSyncState({
+          historicoCompletado: true,
+          historicoConfirmadoPorServidor: true,
+          ultimoLogId: maxId,
+          totalHistorico: historial.length
+        });
+        console.log(`[Main] ✅ Sincronización histórica completada y fijada en ID #${maxId}`);
       } else {
-        cache.setSyncState({ historicoCompletado: true, ultimoLogId: 0 });
+        cache.setSyncState({ historicoCompletado: true, historicoConfirmadoPorServidor: true, ultimoLogId: 0 });
       }
     } catch (e) {
-      console.warn('[Main] Aviso en sincronización histórica inicial:', e.message);
+      console.warn('[Main] Aviso en sincronización histórica:', e.message);
     }
   } else {
     console.log(`[Main] ⚡ Modo incremental activo (último log ID sincronizado: #${syncState.ultimoLogId || 0})`);
     try {
       const delta = await hardwareClient.obtenerHistorialDelta(syncState.ultimoLogId || 0);
       if (delta && delta.length > 0) {
-        gateway.sincronizarOffline(delta);
+        const res = await gateway.sincronizarOffline(delta);
         const maxId = Math.max(...delta.map(h => h.logId || syncState.ultimoLogId));
         cache.setSyncState({ ultimoLogId: maxId });
       }

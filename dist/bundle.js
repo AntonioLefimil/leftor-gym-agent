@@ -9469,13 +9469,37 @@ var require_gateway = __commonJS({
         });
       }
       /**
-       * Sincroniza eventos ocurridos durante una caída de internet
+       * Sincroniza eventos ocurridos durante una caída de internet o historial masivo
        */
       sincronizarOffline(eventos) {
-        if (!this.isConnected || !this.socket || !eventos || eventos.length === 0) return;
-        console.log(`[Gateway] Sincronizando ${eventos.length} eventos offline al servidor...`);
-        this.socket.emit("syncOfflineEvents", { records: eventos }, (ack) => {
-          console.log(`[Gateway] \u2705 Sincronizaci\xF3n offline completada:`, ack);
+        if (!this.isConnected || !this.socket || !eventos || eventos.length === 0) {
+          return Promise.resolve(null);
+        }
+        return new Promise((resolve) => {
+          console.log(`[Gateway] Sincronizando ${eventos.length} eventos al servidor en la nube...`);
+          let terminado = false;
+          const timeout = setTimeout(() => {
+            if (!terminado) {
+              terminado = true;
+              this.socket.off("importHistoryResult", onResult);
+              console.warn(`[Gateway] Aviso: timeout esperando confirmaci\xF3n de sincronizaci\xF3n.`);
+              resolve(null);
+            }
+          }, 3e4);
+          const onResult = (res) => {
+            if (!terminado) {
+              terminado = true;
+              clearTimeout(timeout);
+              this.socket.off("importHistoryResult", onResult);
+              console.log(`[Gateway] \u2705 Sincronizaci\xF3n en la base de datos completada:`, res);
+              resolve(res);
+            }
+          };
+          this.socket.on("importHistoryResult", onResult);
+          this.socket.emit("importHistory", { records: eventos }, (ack) => {
+            if (ack) onResult(ack);
+          });
+          this.socket.emit("syncOfflineEvents", { records: eventos });
         });
       }
       /**
@@ -9705,28 +9729,33 @@ gateway.on("connected", async () => {
     }
   }
   const syncState = cache.getSyncState();
-  if (!syncState.historicoCompletado) {
-    console.log("[Main] \u23F3 Primera sincronizaci\xF3n detectada: extrayendo historial completo de memoria del t\xF3tem...");
+  if (!syncState.historicoConfirmadoPorServidor) {
+    console.log("[Main] \u23F3 Sincronizaci\xF3n hist\xF3rica del historial de accesos...");
     try {
       const historial = await hardwareClient.obtenerHistorialCompleto();
       if (historial && historial.length > 0) {
         console.log(`[Main] \u{1F4E4} Enviando ${historial.length} eventos hist\xF3ricos del t\xF3tem a la base de datos central...`);
-        gateway.sincronizarOffline(historial);
+        const res = await gateway.sincronizarOffline(historial);
         const maxId = Math.max(...historial.map((h) => h.logId || 0));
-        cache.setSyncState({ historicoCompletado: true, ultimoLogId: maxId });
-        console.log(`[Main] \u2705 Sincronizaci\xF3n hist\xF3rica inicial completada y fijada en ID #${maxId}`);
+        cache.setSyncState({
+          historicoCompletado: true,
+          historicoConfirmadoPorServidor: true,
+          ultimoLogId: maxId,
+          totalHistorico: historial.length
+        });
+        console.log(`[Main] \u2705 Sincronizaci\xF3n hist\xF3rica completada y fijada en ID #${maxId}`);
       } else {
-        cache.setSyncState({ historicoCompletado: true, ultimoLogId: 0 });
+        cache.setSyncState({ historicoCompletado: true, historicoConfirmadoPorServidor: true, ultimoLogId: 0 });
       }
     } catch (e) {
-      console.warn("[Main] Aviso en sincronizaci\xF3n hist\xF3rica inicial:", e.message);
+      console.warn("[Main] Aviso en sincronizaci\xF3n hist\xF3rica:", e.message);
     }
   } else {
     console.log(`[Main] \u26A1 Modo incremental activo (\xFAltimo log ID sincronizado: #${syncState.ultimoLogId || 0})`);
     try {
       const delta = await hardwareClient.obtenerHistorialDelta(syncState.ultimoLogId || 0);
       if (delta && delta.length > 0) {
-        gateway.sincronizarOffline(delta);
+        const res = await gateway.sincronizarOffline(delta);
         const maxId = Math.max(...delta.map((h) => h.logId || syncState.ultimoLogId));
         cache.setSyncState({ ultimoLogId: maxId });
       }
