@@ -83,6 +83,11 @@ class ControlIDClient extends EventEmitter {
       console.log(`[Control iD] ✅ Conectado con éxito a terminal iDFace en http://${this.ip}:${this.port}`);
       this.emit('connected');
 
+      // Garantizar horario 00:00 a 23:59 (24/7) para todos los usuarios en el tótem
+      await this.asegurarHorarioTotal().catch(err => {
+        console.warn('[Control iD] Aviso configurando horario 24/7:', err.message);
+      });
+
       // Inicializar el último ID de log para no reaccionar a accesos antiguos
       await this._inicializarUltimoLog();
 
@@ -508,6 +513,138 @@ class ControlIDClient extends EventEmitter {
       });
     } catch (e) {
       return null;
+    }
+  }
+
+  // ─── Configurar Horario Total 24/7 (00:00 - 23:59) en Control iD ──
+  async asegurarHorarioTotal() {
+    try {
+      if (!this.session) await this.login();
+      console.log(`[Control iD] ⏰ Configurando y asegurando horario 00:00 - 23:59 (24/7) para todos los usuarios...`);
+
+      // 1. Asegurar Time Zone 24 Horas
+      let timeZoneId = 1;
+      const tzRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+        object: 'time_zones'
+      });
+      const timeZones = tzRes.data?.time_zones || [];
+      const tz24 = timeZones.find(tz => tz.name && (tz.name.includes('24') || tz.name.includes('00:00')));
+      
+      if (tz24) {
+        timeZoneId = tz24.id;
+      } else if (timeZones.length > 0) {
+        timeZoneId = timeZones[0].id;
+      } else {
+        const createTz = await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'time_zones',
+          values: [{ name: 'Horario Completo (00:00 - 23:59)' }]
+        });
+        if (createTz.data?.ids?.[0]) timeZoneId = createTz.data.ids[0];
+      }
+
+      // 2. Asegurar Time Span 00:00 - 23:59 (0 a 86399 seg) de Lunes a Domingo
+      const tsRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+        object: 'time_spans',
+        where: { time_spans: { time_zone_id: timeZoneId } }
+      });
+      const timeSpans = tsRes.data?.time_spans || [];
+      const spanCompleto = timeSpans.find(ts => ts.start === 0 && ts.end >= 86390 && ts.mon === 1 && ts.sun === 1);
+
+      if (!spanCompleto) {
+        if (timeSpans.length > 0) {
+          // Modificar el existente para abarcar las 24 horas todos los días
+          await this._request(`/modify_objects.fcgi?session=${this.session}`, 'POST', {
+            object: 'time_spans',
+            values: {
+              start: 0,
+              end: 86399,
+              sun: 1, mon: 1, tue: 1, wed: 1, thu: 1, fri: 1, sat: 1, hol1: 1, hol2: 1, hol3: 1
+            },
+            where: { time_spans: { id: timeSpans[0].id } }
+          });
+        } else {
+          // Crear time_span 00:00 a 23:59
+          await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+            object: 'time_spans',
+            values: [{
+              time_zone_id: timeZoneId,
+              start: 0,
+              end: 86399,
+              sun: 1, mon: 1, tue: 1, wed: 1, thu: 1, fri: 1, sat: 1, hol1: 1, hol2: 1, hol3: 1
+            }]
+          });
+        }
+      }
+
+      // 3. Asegurar Regla de Acceso asociada a esta zona horaria
+      const arRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+        object: 'access_rules'
+      });
+      const accessRules = arRes.data?.access_rules || [];
+      let accessRuleId = 1;
+      if (accessRules.length === 0) {
+        const createAr = await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'access_rules',
+          values: [{ name: 'Regla 24/7 (00:00 - 23:59)', type: 0, priority: 0 }]
+        });
+        if (createAr.data?.ids?.[0]) accessRuleId = createAr.data.ids[0];
+      } else {
+        accessRuleId = accessRules[0].id;
+      }
+
+      // Vincular regla de acceso con time zone
+      try {
+        await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'access_rule_time_zones',
+          values: [{ access_rule_id: accessRuleId, time_zone_id: timeZoneId }]
+        });
+      } catch (_) {}
+
+      // Vincular grupo 1 con la regla de acceso
+      try {
+        await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'group_access_rules',
+          values: [{ group_id: 1, access_rule_id: accessRuleId }]
+        });
+      } catch (_) {}
+
+      // Vincular portal 1 con la regla de acceso
+      try {
+        await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'portal_access_rules',
+          values: [{ portal_id: 1, access_rule_id: accessRuleId }]
+        });
+      } catch (_) {}
+
+      // 4. Asegurar que TODOS los usuarios del tótem pertenezcan al Grupo 1 (permiso 00:00 - 23:59)
+      const usersRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+        object: 'users'
+      });
+      const users = usersRes.data?.users || [];
+
+      const ugRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+        object: 'user_groups'
+      });
+      const userGroups = ugRes.data?.user_groups || [];
+      const userIdsInGroup1 = new Set(userGroups.filter(ug => ug.group_id === 1).map(ug => ug.user_id));
+
+      const missingUserGroups = users
+        .filter(u => !userIdsInGroup1.has(u.id))
+        .map(u => ({ user_id: u.id, group_id: 1 }));
+
+      if (missingUserGroups.length > 0) {
+        console.log(`[Control iD] 👥 Asignando ${missingUserGroups.length} usuarios al Grupo 1 (Horario 00:00 - 23:59)...`);
+        await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'user_groups',
+          values: missingUserGroups
+        });
+      }
+
+      console.log(`[Control iD] ✅ Horario 00:00 a 23:59 (24/7) garantizado para los ${users.length} usuarios del tótem.`);
+      return true;
+    } catch (e) {
+      console.error(`[Control iD] ⚠️ Error asegurando horario total:`, e.message);
+      return false;
     }
   }
 }

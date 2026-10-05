@@ -174,6 +174,9 @@ var require_client2 = __commonJS({
           this.isConnected = true;
           console.log(`[Control iD] \u2705 Conectado con \xE9xito a terminal iDFace en http://${this.ip}:${this.port}`);
           this.emit("connected");
+          await this.asegurarHorarioTotal().catch((err) => {
+            console.warn("[Control iD] Aviso configurando horario 24/7:", err.message);
+          });
           await this._inicializarUltimoLog();
           this._iniciarSondeo();
         } catch (err) {
@@ -540,6 +543,135 @@ var require_client2 = __commonJS({
           });
         } catch (e) {
           return null;
+        }
+      }
+      // ─── Configurar Horario Total 24/7 (00:00 - 23:59) en Control iD ──
+      async asegurarHorarioTotal() {
+        var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
+        try {
+          if (!this.session) await this.login();
+          console.log(`[Control iD] \u23F0 Configurando y asegurando horario 00:00 - 23:59 (24/7) para todos los usuarios...`);
+          let timeZoneId = 1;
+          const tzRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "time_zones"
+          });
+          const timeZones = ((_a2 = tzRes.data) == null ? void 0 : _a2.time_zones) || [];
+          const tz24 = timeZones.find((tz) => tz.name && (tz.name.includes("24") || tz.name.includes("00:00")));
+          if (tz24) {
+            timeZoneId = tz24.id;
+          } else if (timeZones.length > 0) {
+            timeZoneId = timeZones[0].id;
+          } else {
+            const createTz = await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "time_zones",
+              values: [{ name: "Horario Completo (00:00 - 23:59)" }]
+            });
+            if ((_c = (_b = createTz.data) == null ? void 0 : _b.ids) == null ? void 0 : _c[0]) timeZoneId = createTz.data.ids[0];
+          }
+          const tsRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "time_spans",
+            where: { time_spans: { time_zone_id: timeZoneId } }
+          });
+          const timeSpans = ((_d = tsRes.data) == null ? void 0 : _d.time_spans) || [];
+          const spanCompleto = timeSpans.find((ts) => ts.start === 0 && ts.end >= 86390 && ts.mon === 1 && ts.sun === 1);
+          if (!spanCompleto) {
+            if (timeSpans.length > 0) {
+              await this._request(`/modify_objects.fcgi?session=${this.session}`, "POST", {
+                object: "time_spans",
+                values: {
+                  start: 0,
+                  end: 86399,
+                  sun: 1,
+                  mon: 1,
+                  tue: 1,
+                  wed: 1,
+                  thu: 1,
+                  fri: 1,
+                  sat: 1,
+                  hol1: 1,
+                  hol2: 1,
+                  hol3: 1
+                },
+                where: { time_spans: { id: timeSpans[0].id } }
+              });
+            } else {
+              await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+                object: "time_spans",
+                values: [{
+                  time_zone_id: timeZoneId,
+                  start: 0,
+                  end: 86399,
+                  sun: 1,
+                  mon: 1,
+                  tue: 1,
+                  wed: 1,
+                  thu: 1,
+                  fri: 1,
+                  sat: 1,
+                  hol1: 1,
+                  hol2: 1,
+                  hol3: 1
+                }]
+              });
+            }
+          }
+          const arRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "access_rules"
+          });
+          const accessRules = ((_e = arRes.data) == null ? void 0 : _e.access_rules) || [];
+          let accessRuleId = 1;
+          if (accessRules.length === 0) {
+            const createAr = await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "access_rules",
+              values: [{ name: "Regla 24/7 (00:00 - 23:59)", type: 0, priority: 0 }]
+            });
+            if ((_g = (_f = createAr.data) == null ? void 0 : _f.ids) == null ? void 0 : _g[0]) accessRuleId = createAr.data.ids[0];
+          } else {
+            accessRuleId = accessRules[0].id;
+          }
+          try {
+            await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "access_rule_time_zones",
+              values: [{ access_rule_id: accessRuleId, time_zone_id: timeZoneId }]
+            });
+          } catch (_) {
+          }
+          try {
+            await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "group_access_rules",
+              values: [{ group_id: 1, access_rule_id: accessRuleId }]
+            });
+          } catch (_) {
+          }
+          try {
+            await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "portal_access_rules",
+              values: [{ portal_id: 1, access_rule_id: accessRuleId }]
+            });
+          } catch (_) {
+          }
+          const usersRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "users"
+          });
+          const users = ((_h = usersRes.data) == null ? void 0 : _h.users) || [];
+          const ugRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "user_groups"
+          });
+          const userGroups = ((_i = ugRes.data) == null ? void 0 : _i.user_groups) || [];
+          const userIdsInGroup1 = new Set(userGroups.filter((ug) => ug.group_id === 1).map((ug) => ug.user_id));
+          const missingUserGroups = users.filter((u) => !userIdsInGroup1.has(u.id)).map((u) => ({ user_id: u.id, group_id: 1 }));
+          if (missingUserGroups.length > 0) {
+            console.log(`[Control iD] \u{1F465} Asignando ${missingUserGroups.length} usuarios al Grupo 1 (Horario 00:00 - 23:59)...`);
+            await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "user_groups",
+              values: missingUserGroups
+            });
+          }
+          console.log(`[Control iD] \u2705 Horario 00:00 a 23:59 (24/7) garantizado para los ${users.length} usuarios del t\xF3tem.`);
+          return true;
+        } catch (e) {
+          console.error(`[Control iD] \u26A0\uFE0F Error asegurando horario total:`, e.message);
+          return false;
         }
       }
     };
