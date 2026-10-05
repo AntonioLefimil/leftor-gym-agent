@@ -31,9 +31,12 @@ async function ejecutar() {
     console.log('[*] Aplicando horario total (00:00 - 23:59) lunes a domingo a todos los socios...');
     const ok = await client.asegurarHorarioTotal();
 
+    console.log('\n[*] Sincronizando reloj del tótem a America/Santiago (Chile)...');
+    await client.sincronizarHoraTotem();
+
     if (ok) {
       console.log('\n====================================================');
-      console.log('🎉 ¡ÉXITO! Horario 00:00 a 23:59 aplicado y verificado.');
+      console.log('🎉 ¡ÉXITO! Horario 00:00 a 23:59 y reloj de Chile sincronizados.');
       console.log('Todos los usuarios del tótem tienen ahora acceso 24/7.');
       console.log('====================================================\n');
       process.exit(0);

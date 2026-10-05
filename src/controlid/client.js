@@ -88,6 +88,11 @@ class ControlIDClient extends EventEmitter {
         console.warn('[Control iD] Aviso configurando horario 24/7:', err.message);
       });
 
+      // Sincronizar reloj interno del tótem con la hora exacta de America/Santiago
+      await this.sincronizarHoraTotem().catch(err => {
+        console.warn('[Control iD] Aviso sincronizando reloj del tótem:', err.message);
+      });
+
       // Inicializar el último ID de log para no reaccionar a accesos antiguos
       await this._inicializarUltimoLog();
 
@@ -644,6 +649,49 @@ class ControlIDClient extends EventEmitter {
       return true;
     } catch (e) {
       console.error(`[Control iD] ⚠️ Error asegurando horario total:`, e.message);
+      return false;
+    }
+  }
+
+  // ─── Sincronizar Reloj Interno a America/Santiago (Chile) ────────
+  async sincronizarHoraTotem() {
+    try {
+      if (!this.session) await this.login();
+      const ahora = new Date();
+
+      // Formatear hora exacta según la zona horaria oficial de Chile
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Santiago',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: false
+      });
+
+      const parts = formatter.formatToParts(ahora);
+      const getVal = (type) => parseInt(parts.find(p => p.type === type)?.value || '0', 10);
+
+      const year = getVal('year');
+      const month = getVal('month');
+      const day = getVal('day');
+      let hour = getVal('hour');
+      if (hour === 24) hour = 0;
+      const minute = getVal('minute');
+      const second = getVal('second');
+
+      console.log(`[Control iD] 🕒 Sincronizando reloj del tótem a America/Santiago: ${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}...`);
+
+      await this._request(`/set_system_time.fcgi?session=${this.session}`, 'POST', {
+        day, month, year, hour, minute, second
+      });
+
+      console.log(`[Control iD] ✅ Reloj del tótem sincronizado exitosamente con America/Santiago`);
+      return true;
+    } catch (e) {
+      console.error(`[Control iD] ⚠️ Error sincronizando reloj del tótem:`, e.message);
       return false;
     }
   }

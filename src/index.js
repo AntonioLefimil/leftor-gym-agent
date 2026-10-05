@@ -203,6 +203,27 @@ gateway.on('freePassage', (data) => {
   hardwareClient.abrirMolinete();
 });
 
+gateway.on('configurarTotem', async (data, ack) => {
+  console.log('[Main] ⏰ Configurando horario 00:00 - 23:59 y reloj en el tótem por orden del backend...');
+  try {
+    if (typeof hardwareClient.asegurarHorarioTotal === 'function') {
+      await hardwareClient.asegurarHorarioTotal();
+    }
+    if (typeof hardwareClient.sincronizarHoraTotem === 'function') {
+      await hardwareClient.sincronizarHoraTotem();
+    }
+    console.log('[Main] ✅ Configuración del tótem completada exitosamente.');
+    if (typeof ack === 'function') {
+      ack({ ok: true, mensaje: 'Horario 00:00 - 23:59 y hora America/Santiago sincronizados exitosamente en el tótem.' });
+    }
+  } catch (err) {
+    console.error('[Main] ❌ Error configurando tótem:', err.message);
+    if (typeof ack === 'function') {
+      ack({ ok: false, mensaje: err.message });
+    }
+  }
+});
+
 // ─── Eventos del Molinete (Hardware Local) ────────────────────
 hardwareClient.on('verify', async (userId, timestamp) => {
   console.log(`\n----------------------------------------------------`);

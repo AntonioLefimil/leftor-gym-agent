@@ -53,6 +53,11 @@ class GatewayClient extends EventEmitter {
       console.log(`[Gateway] ⏱️ Evento 'freePassage' recibido desde el panel web:`, data);
       this.emit('freePassage', data);
     });
+
+    this.socket.on('configurarTotem', (data, ack) => {
+      console.log(`[Gateway] ⚙️ Evento 'configurarTotem' recibido desde el backend:`, data);
+      this.emit('configurarTotem', data, ack);
+    });
   }
 
   /**

@@ -177,6 +177,9 @@ var require_client2 = __commonJS({
           await this.asegurarHorarioTotal().catch((err) => {
             console.warn("[Control iD] Aviso configurando horario 24/7:", err.message);
           });
+          await this.sincronizarHoraTotem().catch((err) => {
+            console.warn("[Control iD] Aviso sincronizando reloj del t\xF3tem:", err.message);
+          });
           await this._inicializarUltimoLog();
           this._iniciarSondeo();
         } catch (err) {
@@ -671,6 +674,49 @@ var require_client2 = __commonJS({
           return true;
         } catch (e) {
           console.error(`[Control iD] \u26A0\uFE0F Error asegurando horario total:`, e.message);
+          return false;
+        }
+      }
+      // ─── Sincronizar Reloj Interno a America/Santiago (Chile) ────────
+      async sincronizarHoraTotem() {
+        try {
+          if (!this.session) await this.login();
+          const ahora = /* @__PURE__ */ new Date();
+          const formatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/Santiago",
+            year: "numeric",
+            month: "numeric",
+            day: "numeric",
+            hour: "numeric",
+            minute: "numeric",
+            second: "numeric",
+            hour12: false
+          });
+          const parts = formatter.formatToParts(ahora);
+          const getVal = (type) => {
+            var _a2;
+            return parseInt(((_a2 = parts.find((p) => p.type === type)) == null ? void 0 : _a2.value) || "0", 10);
+          };
+          const year = getVal("year");
+          const month = getVal("month");
+          const day = getVal("day");
+          let hour = getVal("hour");
+          if (hour === 24) hour = 0;
+          const minute = getVal("minute");
+          const second = getVal("second");
+          console.log(`[Control iD] \u{1F552} Sincronizando reloj del t\xF3tem a America/Santiago: ${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}...`);
+          await this._request(`/set_system_time.fcgi?session=${this.session}`, "POST", {
+            day,
+            month,
+            year,
+            hour,
+            minute,
+            second
+          });
+          console.log(`[Control iD] \u2705 Reloj del t\xF3tem sincronizado exitosamente con America/Santiago`);
+          return true;
+        } catch (e) {
+          console.error(`[Control iD] \u26A0\uFE0F Error sincronizando reloj del t\xF3tem:`, e.message);
           return false;
         }
       }
@@ -9584,6 +9630,10 @@ var require_gateway = __commonJS({
           console.log(`[Gateway] \u23F1\uFE0F Evento 'freePassage' recibido desde el panel web:`, data);
           this.emit("freePassage", data);
         });
+        this.socket.on("configurarTotem", (data, ack) => {
+          console.log(`[Gateway] \u2699\uFE0F Evento 'configurarTotem' recibido desde el backend:`, data);
+          this.emit("configurarTotem", data, ack);
+        });
       }
       /**
        * Consulta al servidor si el socio tiene acceso permitido
@@ -9942,6 +9992,26 @@ gateway.on("freePassage", (data) => {
   modoPasoLibreHasta = Date.now() + minutos * 60 * 1e3;
   console.log(`[Main] \u23F1\uFE0F Modo Paso Libre activado por ${minutos} minutos (hasta ${new Date(modoPasoLibreHasta).toLocaleTimeString()})`);
   hardwareClient.abrirMolinete();
+});
+gateway.on("configurarTotem", async (data, ack) => {
+  console.log("[Main] \u23F0 Configurando horario 00:00 - 23:59 y reloj en el t\xF3tem por orden del backend...");
+  try {
+    if (typeof hardwareClient.asegurarHorarioTotal === "function") {
+      await hardwareClient.asegurarHorarioTotal();
+    }
+    if (typeof hardwareClient.sincronizarHoraTotem === "function") {
+      await hardwareClient.sincronizarHoraTotem();
+    }
+    console.log("[Main] \u2705 Configuraci\xF3n del t\xF3tem completada exitosamente.");
+    if (typeof ack === "function") {
+      ack({ ok: true, mensaje: "Horario 00:00 - 23:59 y hora America/Santiago sincronizados exitosamente en el t\xF3tem." });
+    }
+  } catch (err) {
+    console.error("[Main] \u274C Error configurando t\xF3tem:", err.message);
+    if (typeof ack === "function") {
+      ack({ ok: false, mensaje: err.message });
+    }
+  }
 });
 hardwareClient.on("verify", async (userId, timestamp) => {
   console.log(`
