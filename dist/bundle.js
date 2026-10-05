@@ -381,7 +381,7 @@ var require_client2 = __commonJS({
       }
       // ─── Crear o Actualizar Socio desde la Web en el Tótem ──────
       async crearOActualizarUsuario(socio) {
-        var _a2, _b, _c, _d;
+        var _a2, _b, _c, _d, _e;
         try {
           if (!this.session) await this.login();
           const nombreCompleto = `${socio.nombre || ""} ${socio.apellido || ""}`.trim() || "Socio";
@@ -400,6 +400,26 @@ var require_client2 = __commonJS({
             });
             if (((_b = (_a2 = busqueda.data) == null ? void 0 : _a2.users) == null ? void 0 : _b.length) > 0) {
               userIdEnTotem = busqueda.data.users[0].id;
+            }
+          }
+          if (!userIdEnTotem && nombreCompleto) {
+            try {
+              const busquedaNombre = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+                object: "users"
+              });
+              const users = ((_c = busquedaNombre.data) == null ? void 0 : _c.users) || [];
+              const norm = (str) => (str || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+              const target = norm(nombreCompleto);
+              const match = users.find((u) => {
+                const uNorm = norm(u.name);
+                return uNorm && (uNorm === target || target.length > 5 && uNorm.includes(target) || uNorm.length > 5 && target.includes(uNorm));
+              });
+              if (match) {
+                userIdEnTotem = match.id;
+                console.log(`[Control iD] \u{1F517} Vinculaci\xF3n autom\xE1tica: '${nombreCompleto}' vinculado con usuario #${match.id} ('${match.name}') en el t\xF3tem.`);
+              }
+            } catch (e) {
+              console.warn(`[Control iD] Error en b\xFAsqueda por nombre en t\xF3tem:`, e.message);
             }
           }
           if (userIdEnTotem) {
@@ -429,7 +449,7 @@ var require_client2 = __commonJS({
                 }
               ]
             });
-            const newId = (_d = (_c = crearRes.data) == null ? void 0 : _c.ids) == null ? void 0 : _d[0];
+            const newId = (_e = (_d = crearRes.data) == null ? void 0 : _d.ids) == null ? void 0 : _e[0];
             if (newId) {
               await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
                 object: "user_groups",

@@ -356,6 +356,28 @@ class ControlIDClient extends EventEmitter {
         }
       }
 
+      // Si aún no se encontró, buscar automáticamente por coincidencia de nombre en el tótem
+      if (!userIdEnTotem && nombreCompleto) {
+        try {
+          const busquedaNombre = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+            object: 'users',
+          });
+          const users = busquedaNombre.data?.users || [];
+          const norm = (str) => (str || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const target = norm(nombreCompleto);
+          const match = users.find(u => {
+            const uNorm = norm(u.name);
+            return uNorm && (uNorm === target || (target.length > 5 && uNorm.includes(target)) || (uNorm.length > 5 && target.includes(uNorm)));
+          });
+          if (match) {
+            userIdEnTotem = match.id;
+            console.log(`[Control iD] 🔗 Vinculación automática: '${nombreCompleto}' vinculado con usuario #${match.id} ('${match.name}') en el tótem.`);
+          }
+        } catch (e) {
+          console.warn(`[Control iD] Error en búsqueda por nombre en tótem:`, e.message);
+        }
+      }
+
       if (userIdEnTotem) {
         // Actualizar usuario en el tótem
         console.log(`[Control iD] 🔄 Actualizando socio existente en tótem #${userIdEnTotem} (${nombreCompleto})...`);
