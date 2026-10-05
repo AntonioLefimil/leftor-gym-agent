@@ -130,20 +130,35 @@ gateway.on('connected', async () => {
     }
   }
 
-  // 3. Sincronizar historial completo de accesos del tótem con la base de datos central
-  if (typeof hardwareClient.obtenerHistorialCompleto === 'function' || typeof hardwareClient.obtenerHistorialReciente === 'function') {
+  // 3. Sincronización de accesos: Carga Inicial Completa vs Delta Incremental
+  const syncState = cache.getSyncState();
+  if (!syncState.historicoCompletado) {
+    console.log('[Main] ⏳ Primera sincronización detectada: extrayendo historial completo de memoria del tótem...');
     try {
-      console.log('[Main] 🔄 Extrayendo historial completo de accesos del tótem para sincronizar con la nube...');
-      const fn = hardwareClient.obtenerHistorialCompleto
-        ? hardwareClient.obtenerHistorialCompleto.bind(hardwareClient)
-        : hardwareClient.obtenerHistorialReciente.bind(hardwareClient);
-      const historial = await fn();
+      const historial = await hardwareClient.obtenerHistorialCompleto();
       if (historial && historial.length > 0) {
         console.log(`[Main] 📤 Enviando ${historial.length} eventos históricos del tótem a la base de datos central...`);
         gateway.sincronizarOffline(historial);
+        const maxId = Math.max(...historial.map(h => h.logId || 0));
+        cache.setSyncState({ historicoCompletado: true, ultimoLogId: maxId });
+        console.log(`[Main] ✅ Sincronización histórica inicial completada y fijada en ID #${maxId}`);
+      } else {
+        cache.setSyncState({ historicoCompletado: true, ultimoLogId: 0 });
       }
     } catch (e) {
-      console.warn('[Main] Aviso sincronizando historial del tótem:', e.message);
+      console.warn('[Main] Aviso en sincronización histórica inicial:', e.message);
+    }
+  } else {
+    console.log(`[Main] ⚡ Modo incremental activo (último log ID sincronizado: #${syncState.ultimoLogId || 0})`);
+    try {
+      const delta = await hardwareClient.obtenerHistorialDelta(syncState.ultimoLogId || 0);
+      if (delta && delta.length > 0) {
+        gateway.sincronizarOffline(delta);
+        const maxId = Math.max(...delta.map(h => h.logId || syncState.ultimoLogId));
+        cache.setSyncState({ ultimoLogId: maxId });
+      }
+    } catch (e) {
+      console.warn('[Main] Aviso en sincronización incremental:', e.message);
     }
   }
 });
@@ -246,4 +261,36 @@ hardwareClient.on('verify', async (userId, timestamp) => {
 // ─── Iniciar conexiones ───────────────────────────────────────
 hardwareClient.conectar();
 gateway.conectar();
+
+// ─── Tareas Periódicas de Mantenimiento y Sincronización ──────
+
+// 1. Sincronización Delta de accesos cada 2 minutos
+setInterval(async () => {
+  if (gateway.isConnected && typeof hardwareClient.obtenerHistorialDelta === 'function') {
+    const syncState = cache.getSyncState();
+    if (syncState.historicoCompletado) {
+      try {
+        const delta = await hardwareClient.obtenerHistorialDelta(syncState.ultimoLogId || 0);
+        if (delta && delta.length > 0) {
+          gateway.sincronizarOffline(delta);
+          const maxId = Math.max(...delta.map(h => h.logId || syncState.ultimoLogId));
+          cache.setSyncState({ ultimoLogId: maxId });
+        }
+      } catch (_) {}
+    }
+  }
+}, 120000); // 2 minutos
+
+// 2. Reconciliación de integridad de socios cada 15 minutos
+setInterval(async () => {
+  if (gateway.isConnected && typeof hardwareClient.obtenerUsuariosCompletos === 'function') {
+    console.log('[Main] 🩺 [15 min] Ejecutando reconciliación periódica de socios con la nube...');
+    try {
+      const usuarios = await hardwareClient.obtenerUsuariosCompletos();
+      if (usuarios && usuarios.length > 0) {
+        gateway.sincronizarUsuariosTotem(usuarios);
+      }
+    } catch (_) {}
+  }
+}, 900000); // 15 minutos
 

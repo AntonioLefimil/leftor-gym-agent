@@ -117,9 +117,9 @@ class ControlIDClient extends EventEmitter {
     if (this.pollInterval) clearInterval(this.pollInterval);
     this.pollInterval = setInterval(() => this._pollNuevosLogs(), 1000);
 
-    // Sondeo periódico de nuevos usuarios enrolados en el tótem cada 10 segundos
+    // Sondeo periódico de nuevos usuarios enrolados en el tótem cada 30 segundos
     if (this.userPollInterval) clearInterval(this.userPollInterval);
-    this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 10000);
+    this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 30000);
   }
 
   async _pollNuevosUsuarios() {
@@ -134,8 +134,19 @@ class ControlIDClient extends EventEmitter {
         return;
       }
       if (users.length !== this.lastKnownUserCount) {
-        console.log(`[Control iD] 🆕 Cambio detectado en usuarios del tótem (${this.lastKnownUserCount} -> ${users.length}). Emitiendo evento...`);
+        console.log(`[Control iD] 🆕 Cambio detectado en usuarios del tótem (${this.lastKnownUserCount} -> ${users.length}). Extrayendo fotos de perfil...`);
         this.lastKnownUserCount = users.length;
+
+        // Intentar enriquecer fotos de los usuarios más recientes
+        for (const u of users) {
+          if (!u.foto) {
+            try {
+              const foto = await this.obtenerFotoUsuario(u.id);
+              if (foto) u.foto = foto;
+            } catch (_) {}
+          }
+        }
+
         this.emit('usersChanged', users);
       }
     } catch (e) {
@@ -269,6 +280,35 @@ class ControlIDClient extends EventEmitter {
 
   async obtenerHistorialReciente(limite = 50) {
     return this.obtenerHistorialCompleto();
+  }
+
+  // ─── Obtener Historial Delta (Solo eventos nuevos desde ultimoLogId) ───
+  async obtenerHistorialDelta(ultimoLogId = 0) {
+    try {
+      if (!this.session) await this.login();
+      const res = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+        object: 'access_logs',
+        order: ['time', 'descending'],
+        limit: 100
+      });
+
+      const logs = res.data?.access_logs || [];
+      const delta = logs.filter(l => l.id > ultimoLogId);
+
+      if (delta.length > 0) {
+        console.log(`[Control iD] 📥 Sincronización incremental: ${delta.length} nuevos eventos desde ID #${ultimoLogId}`);
+      }
+
+      return delta.reverse().map(l => ({
+        logId: l.id,
+        zkId: String(l.user_id || l.card_value || '0'),
+        event: l.event,
+        timestamp: new Date(l.time * 1000).toISOString()
+      }));
+    } catch (e) {
+      console.warn(`[Control iD] Aviso en obtenerHistorialDelta:`, e.message);
+      return [];
+    }
   }
 
   // ─── Obtener Todos los Usuarios del Tótem ───────────────────

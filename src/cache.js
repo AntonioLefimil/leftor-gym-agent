@@ -85,6 +85,19 @@ class CacheManager {
     this.data.eventosPendientes = [];
     this.guardar();
   }
+
+  getSyncState() {
+    return this.data.syncState || {
+      historicoCompletado: false,
+      ultimoLogId: 0,
+      ultimoSync: null
+    };
+  }
+
+  setSyncState(state) {
+    this.data.syncState = { ...this.getSyncState(), ...state, ultimoSync: new Date().toISOString() };
+    this.guardar();
+  }
 }
 
 module.exports = CacheManager;

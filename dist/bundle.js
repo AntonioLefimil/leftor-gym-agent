@@ -202,7 +202,7 @@ var require_client2 = __commonJS({
         if (this.pollInterval) clearInterval(this.pollInterval);
         this.pollInterval = setInterval(() => this._pollNuevosLogs(), 1e3);
         if (this.userPollInterval) clearInterval(this.userPollInterval);
-        this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 1e4);
+        this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 3e4);
       }
       async _pollNuevosUsuarios() {
         var _a2;
@@ -217,8 +217,17 @@ var require_client2 = __commonJS({
             return;
           }
           if (users.length !== this.lastKnownUserCount) {
-            console.log(`[Control iD] \u{1F195} Cambio detectado en usuarios del t\xF3tem (${this.lastKnownUserCount} -> ${users.length}). Emitiendo evento...`);
+            console.log(`[Control iD] \u{1F195} Cambio detectado en usuarios del t\xF3tem (${this.lastKnownUserCount} -> ${users.length}). Extrayendo fotos de perfil...`);
             this.lastKnownUserCount = users.length;
+            for (const u of users) {
+              if (!u.foto) {
+                try {
+                  const foto = await this.obtenerFotoUsuario(u.id);
+                  if (foto) u.foto = foto;
+                } catch (_) {
+                }
+              }
+            }
             this.emit("usersChanged", users);
           }
         } catch (e) {
@@ -329,6 +338,32 @@ var require_client2 = __commonJS({
       }
       async obtenerHistorialReciente(limite = 50) {
         return this.obtenerHistorialCompleto();
+      }
+      // ─── Obtener Historial Delta (Solo eventos nuevos desde ultimoLogId) ───
+      async obtenerHistorialDelta(ultimoLogId = 0) {
+        var _a2;
+        try {
+          if (!this.session) await this.login();
+          const res = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "access_logs",
+            order: ["time", "descending"],
+            limit: 100
+          });
+          const logs = ((_a2 = res.data) == null ? void 0 : _a2.access_logs) || [];
+          const delta = logs.filter((l) => l.id > ultimoLogId);
+          if (delta.length > 0) {
+            console.log(`[Control iD] \u{1F4E5} Sincronizaci\xF3n incremental: ${delta.length} nuevos eventos desde ID #${ultimoLogId}`);
+          }
+          return delta.reverse().map((l) => ({
+            logId: l.id,
+            zkId: String(l.user_id || l.card_value || "0"),
+            event: l.event,
+            timestamp: new Date(l.time * 1e3).toISOString()
+          }));
+        } catch (e) {
+          console.warn(`[Control iD] Aviso en obtenerHistorialDelta:`, e.message);
+          return [];
+        }
       }
       // ─── Obtener Todos los Usuarios del Tótem ───────────────────
       async obtenerUsuariosCompletos() {
@@ -9549,6 +9584,17 @@ var require_cache = __commonJS({
         this.data.eventosPendientes = [];
         this.guardar();
       }
+      getSyncState() {
+        return this.data.syncState || {
+          historicoCompletado: false,
+          ultimoLogId: 0,
+          ultimoSync: null
+        };
+      }
+      setSyncState(state) {
+        this.data.syncState = { ...this.getSyncState(), ...state, ultimoSync: (/* @__PURE__ */ new Date()).toISOString() };
+        this.guardar();
+      }
     };
     module2.exports = CacheManager2;
   }
@@ -9658,17 +9704,34 @@ gateway.on("connected", async () => {
       console.warn("[Main] Aviso extrayendo usuarios del t\xF3tem:", e.message);
     }
   }
-  if (typeof hardwareClient.obtenerHistorialCompleto === "function" || typeof hardwareClient.obtenerHistorialReciente === "function") {
+  const syncState = cache.getSyncState();
+  if (!syncState.historicoCompletado) {
+    console.log("[Main] \u23F3 Primera sincronizaci\xF3n detectada: extrayendo historial completo de memoria del t\xF3tem...");
     try {
-      console.log("[Main] \u{1F504} Extrayendo historial completo de accesos del t\xF3tem para sincronizar con la nube...");
-      const fn = hardwareClient.obtenerHistorialCompleto ? hardwareClient.obtenerHistorialCompleto.bind(hardwareClient) : hardwareClient.obtenerHistorialReciente.bind(hardwareClient);
-      const historial = await fn();
+      const historial = await hardwareClient.obtenerHistorialCompleto();
       if (historial && historial.length > 0) {
         console.log(`[Main] \u{1F4E4} Enviando ${historial.length} eventos hist\xF3ricos del t\xF3tem a la base de datos central...`);
         gateway.sincronizarOffline(historial);
+        const maxId = Math.max(...historial.map((h) => h.logId || 0));
+        cache.setSyncState({ historicoCompletado: true, ultimoLogId: maxId });
+        console.log(`[Main] \u2705 Sincronizaci\xF3n hist\xF3rica inicial completada y fijada en ID #${maxId}`);
+      } else {
+        cache.setSyncState({ historicoCompletado: true, ultimoLogId: 0 });
       }
     } catch (e) {
-      console.warn("[Main] Aviso sincronizando historial del t\xF3tem:", e.message);
+      console.warn("[Main] Aviso en sincronizaci\xF3n hist\xF3rica inicial:", e.message);
+    }
+  } else {
+    console.log(`[Main] \u26A1 Modo incremental activo (\xFAltimo log ID sincronizado: #${syncState.ultimoLogId || 0})`);
+    try {
+      const delta = await hardwareClient.obtenerHistorialDelta(syncState.ultimoLogId || 0);
+      if (delta && delta.length > 0) {
+        gateway.sincronizarOffline(delta);
+        const maxId = Math.max(...delta.map((h) => h.logId || syncState.ultimoLogId));
+        cache.setSyncState({ ultimoLogId: maxId });
+      }
+    } catch (e) {
+      console.warn("[Main] Aviso en sincronizaci\xF3n incremental:", e.message);
     }
   }
 });
@@ -9750,6 +9813,34 @@ hardwareClient.on("verify", async (userId, timestamp) => {
 });
 hardwareClient.conectar();
 gateway.conectar();
+setInterval(async () => {
+  if (gateway.isConnected && typeof hardwareClient.obtenerHistorialDelta === "function") {
+    const syncState = cache.getSyncState();
+    if (syncState.historicoCompletado) {
+      try {
+        const delta = await hardwareClient.obtenerHistorialDelta(syncState.ultimoLogId || 0);
+        if (delta && delta.length > 0) {
+          gateway.sincronizarOffline(delta);
+          const maxId = Math.max(...delta.map((h) => h.logId || syncState.ultimoLogId));
+          cache.setSyncState({ ultimoLogId: maxId });
+        }
+      } catch (_) {
+      }
+    }
+  }
+}, 12e4);
+setInterval(async () => {
+  if (gateway.isConnected && typeof hardwareClient.obtenerUsuariosCompletos === "function") {
+    console.log("[Main] \u{1FA7A} [15 min] Ejecutando reconciliaci\xF3n peri\xF3dica de socios con la nube...");
+    try {
+      const usuarios = await hardwareClient.obtenerUsuariosCompletos();
+      if (usuarios && usuarios.length > 0) {
+        gateway.sincronizarUsuariosTotem(usuarios);
+      }
+    } catch (_) {
+    }
+  }
+}, 9e5);
 /*! Bundled license information:
 
 xmlhttprequest-ssl/lib/XMLHttpRequest.js:
