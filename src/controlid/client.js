@@ -127,9 +127,9 @@ class ControlIDClient extends EventEmitter {
     if (this.pollInterval) clearInterval(this.pollInterval);
     this.pollInterval = setInterval(() => this._pollNuevosLogs(), 1000);
 
-    // Sondeo periódico de nuevos usuarios enrolados en el tótem cada 30 segundos
+    // Sondeo periódico de nuevos usuarios enrolados en el tótem cada 5 segundos
     if (this.userPollInterval) clearInterval(this.userPollInterval);
-    this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 30000);
+    this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 5000);
   }
 
   async _pollNuevosUsuarios() {
@@ -144,8 +144,13 @@ class ControlIDClient extends EventEmitter {
         return;
       }
       if (users.length !== this.lastKnownUserCount) {
-        console.log(`[Control iD] 🆕 Cambio detectado en usuarios del tótem (${this.lastKnownUserCount} -> ${users.length}). Extrayendo fotos de perfil...`);
+        console.log(`[Control iD] 🆕 Cambio detectado en usuarios del tótem (${this.lastKnownUserCount} -> ${users.length}). Auto-asignando horario 00:00 - 23:59...`);
         this.lastKnownUserCount = users.length;
+
+        // Auto-asignar horario total y permisos 24/7 a cualquier usuario nuevo inmediatamente
+        await this.asegurarHorarioTotal().catch(err => {
+          console.warn('[Control iD] Aviso auto-asignando horario a nuevos usuarios:', err.message);
+        });
 
         // Intentar enriquecer fotos de los usuarios más recientes
         for (const u of users) {
@@ -547,37 +552,37 @@ class ControlIDClient extends EventEmitter {
         if (createTz.data?.ids?.[0]) timeZoneId = createTz.data.ids[0];
       }
 
-      // 2. Asegurar Time Span 00:00 - 23:59 (0 a 86399 seg) de Lunes a Domingo
-      const tsRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
-        object: 'time_spans',
-        where: { time_spans: { time_zone_id: timeZoneId } }
+      // 2. Asegurar que TODOS los Time Spans del tótem estén configurados en 00:00 - 23:59
+      const allTsRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+        object: 'time_spans'
       });
-      const timeSpans = tsRes.data?.time_spans || [];
-      const spanCompleto = timeSpans.find(ts => ts.start === 0 && ts.end >= 86390 && ts.mon === 1 && ts.sun === 1);
+      const allTimeSpans = allTsRes.data?.time_spans || [];
 
-      if (!spanCompleto) {
-        if (timeSpans.length > 0) {
-          // Modificar el existente para abarcar las 24 horas todos los días
-          await this._request(`/modify_objects.fcgi?session=${this.session}`, 'POST', {
-            object: 'time_spans',
-            values: {
-              start: 0,
-              end: 86399,
-              sun: 1, mon: 1, tue: 1, wed: 1, thu: 1, fri: 1, sat: 1, hol1: 1, hol2: 1, hol3: 1
-            },
-            where: { time_spans: { id: timeSpans[0].id } }
-          });
-        } else {
-          // Crear time_span 00:00 a 23:59
-          await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
-            object: 'time_spans',
-            values: [{
-              time_zone_id: timeZoneId,
-              start: 0,
-              end: 86399,
-              sun: 1, mon: 1, tue: 1, wed: 1, thu: 1, fri: 1, sat: 1, hol1: 1, hol2: 1, hol3: 1
-            }]
-          });
+      if (allTimeSpans.length === 0) {
+        // Crear time_span 00:00 a 23:59
+        await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'time_spans',
+          values: [{
+            time_zone_id: timeZoneId,
+            start: 0,
+            end: 86399,
+            sun: 1, mon: 1, tue: 1, wed: 1, thu: 1, fri: 1, sat: 1, hol1: 1, hol2: 1, hol3: 1
+          }]
+        });
+      } else {
+        // Modificar cada time_span existente para que cubra 24/7
+        for (const ts of allTimeSpans) {
+          if (ts.start !== 0 || ts.end < 86390 || ts.mon !== 1 || ts.sun !== 1) {
+            await this._request(`/modify_objects.fcgi?session=${this.session}`, 'POST', {
+              object: 'time_spans',
+              values: {
+                start: 0,
+                end: 86399,
+                sun: 1, mon: 1, tue: 1, wed: 1, thu: 1, fri: 1, sat: 1, hol1: 1, hol2: 1, hol3: 1
+              },
+              where: { time_spans: { id: ts.id } }
+            }).catch(() => null);
+          }
         }
       }
 
@@ -621,12 +626,13 @@ class ControlIDClient extends EventEmitter {
         });
       } catch (_) {}
 
-      // 4. Asegurar que TODOS los usuarios del tótem pertenezcan al Grupo 1 (permiso 00:00 - 23:59)
+      // 4. Asignación universal a TODOS los usuarios del tótem
       const usersRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
         object: 'users'
       });
       const users = usersRes.data?.users || [];
 
+      // A) user_groups: Grupo 1
       const ugRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
         object: 'user_groups'
       });
@@ -642,7 +648,39 @@ class ControlIDClient extends EventEmitter {
         await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
           object: 'user_groups',
           values: missingUserGroups
+        }).catch(() => null);
+      }
+
+      // B) user_access_rules: Regla 1 directa (para usuarios creados desde la pantalla táctil)
+      try {
+        const uarRes = await this._request(`/load_objects.fcgi?session=${this.session}`, 'POST', {
+          object: 'user_access_rules'
         });
+        const userAccessRules = uarRes.data?.user_access_rules || [];
+        const userIdsWithRule = new Set(userAccessRules.map(r => r.user_id));
+        const missingUserRules = users
+          .filter(u => !userIdsWithRule.has(u.id))
+          .map(u => ({ user_id: u.id, access_rule_id: accessRuleId }));
+
+        if (missingUserRules.length > 0) {
+          console.log(`[Control iD] 📋 Asignando regla 24/7 directa a ${missingUserRules.length} usuarios...`);
+          await this._request(`/create_objects.fcgi?session=${this.session}`, 'POST', {
+            object: 'user_access_rules',
+            values: missingUserRules
+          }).catch(() => null);
+        }
+      } catch (_) {}
+
+      // C) Limpiar restricciones de fecha expirada (end_time) en los usuarios del tótem
+      const ahoraSeg = Math.floor(Date.now() / 1000);
+      for (const u of users) {
+        if (u.end_time > 0 && u.end_time < ahoraSeg) {
+          await this._request(`/modify_objects.fcgi?session=${this.session}`, 'POST', {
+            object: 'users',
+            values: { begin_time: 0, end_time: 0 },
+            where: { users: { id: u.id } }
+          }).catch(() => null);
+        }
       }
 
       console.log(`[Control iD] ✅ Horario 00:00 a 23:59 (24/7) garantizado para los ${users.length} usuarios del tótem.`);
@@ -682,13 +720,25 @@ class ControlIDClient extends EventEmitter {
       const minute = getVal('minute');
       const second = getVal('second');
 
-      console.log(`[Control iD] 🕒 Sincronizando reloj del tótem a America/Santiago: ${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}...`);
+      // 1. Configurar NTP a UTC-3 (Zona horaria de Chile continental en horario de verano)
+      try {
+        console.log('[Control iD] 🌐 Configurando NTP del tótem en UTC-3 (servidor: cl.pool.ntp.org)...');
+        await this._request(`/set_configuration.fcgi?session=${this.session}`, 'POST', {
+          ntp: {
+            enabled: "1",
+            timezone: "UTC-3",
+            server: "cl.pool.ntp.org"
+          }
+        });
+      } catch (_) {}
 
+      // 2. Ajustar reloj manual al segundo exacto en America/Santiago
+      console.log(`[Control iD] 🕒 Sincronizando reloj del tótem a America/Santiago: ${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}...`);
       await this._request(`/set_system_time.fcgi?session=${this.session}`, 'POST', {
         day, month, year, hour, minute, second
       });
 
-      console.log(`[Control iD] ✅ Reloj del tótem sincronizado exitosamente con America/Santiago`);
+      console.log(`[Control iD] ✅ Reloj y zona horaria del tótem sincronizados exitosamente`);
       return true;
     } catch (e) {
       console.error(`[Control iD] ⚠️ Error sincronizando reloj del tótem:`, e.message);

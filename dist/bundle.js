@@ -208,7 +208,7 @@ var require_client2 = __commonJS({
         if (this.pollInterval) clearInterval(this.pollInterval);
         this.pollInterval = setInterval(() => this._pollNuevosLogs(), 1e3);
         if (this.userPollInterval) clearInterval(this.userPollInterval);
-        this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 3e4);
+        this.userPollInterval = setInterval(() => this._pollNuevosUsuarios(), 5e3);
       }
       async _pollNuevosUsuarios() {
         var _a2;
@@ -223,8 +223,11 @@ var require_client2 = __commonJS({
             return;
           }
           if (users.length !== this.lastKnownUserCount) {
-            console.log(`[Control iD] \u{1F195} Cambio detectado en usuarios del t\xF3tem (${this.lastKnownUserCount} -> ${users.length}). Extrayendo fotos de perfil...`);
+            console.log(`[Control iD] \u{1F195} Cambio detectado en usuarios del t\xF3tem (${this.lastKnownUserCount} -> ${users.length}). Auto-asignando horario 00:00 - 23:59...`);
             this.lastKnownUserCount = users.length;
+            await this.asegurarHorarioTotal().catch((err) => {
+              console.warn("[Control iD] Aviso auto-asignando horario a nuevos usuarios:", err.message);
+            });
             for (const u of users) {
               if (!u.foto) {
                 try {
@@ -550,7 +553,7 @@ var require_client2 = __commonJS({
       }
       // ─── Configurar Horario Total 24/7 (00:00 - 23:59) en Control iD ──
       async asegurarHorarioTotal() {
-        var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
+        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j;
         try {
           if (!this.session) await this.login();
           console.log(`[Control iD] \u23F0 Configurando y asegurando horario 00:00 - 23:59 (24/7) para todos los usuarios...`);
@@ -571,51 +574,51 @@ var require_client2 = __commonJS({
             });
             if ((_c = (_b = createTz.data) == null ? void 0 : _b.ids) == null ? void 0 : _c[0]) timeZoneId = createTz.data.ids[0];
           }
-          const tsRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
-            object: "time_spans",
-            where: { time_spans: { time_zone_id: timeZoneId } }
+          const allTsRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+            object: "time_spans"
           });
-          const timeSpans = ((_d = tsRes.data) == null ? void 0 : _d.time_spans) || [];
-          const spanCompleto = timeSpans.find((ts) => ts.start === 0 && ts.end >= 86390 && ts.mon === 1 && ts.sun === 1);
-          if (!spanCompleto) {
-            if (timeSpans.length > 0) {
-              await this._request(`/modify_objects.fcgi?session=${this.session}`, "POST", {
-                object: "time_spans",
-                values: {
-                  start: 0,
-                  end: 86399,
-                  sun: 1,
-                  mon: 1,
-                  tue: 1,
-                  wed: 1,
-                  thu: 1,
-                  fri: 1,
-                  sat: 1,
-                  hol1: 1,
-                  hol2: 1,
-                  hol3: 1
-                },
-                where: { time_spans: { id: timeSpans[0].id } }
-              });
-            } else {
-              await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
-                object: "time_spans",
-                values: [{
-                  time_zone_id: timeZoneId,
-                  start: 0,
-                  end: 86399,
-                  sun: 1,
-                  mon: 1,
-                  tue: 1,
-                  wed: 1,
-                  thu: 1,
-                  fri: 1,
-                  sat: 1,
-                  hol1: 1,
-                  hol2: 1,
-                  hol3: 1
-                }]
-              });
+          const allTimeSpans = ((_d = allTsRes.data) == null ? void 0 : _d.time_spans) || [];
+          if (allTimeSpans.length === 0) {
+            await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+              object: "time_spans",
+              values: [{
+                time_zone_id: timeZoneId,
+                start: 0,
+                end: 86399,
+                sun: 1,
+                mon: 1,
+                tue: 1,
+                wed: 1,
+                thu: 1,
+                fri: 1,
+                sat: 1,
+                hol1: 1,
+                hol2: 1,
+                hol3: 1
+              }]
+            });
+          } else {
+            for (const ts of allTimeSpans) {
+              if (ts.start !== 0 || ts.end < 86390 || ts.mon !== 1 || ts.sun !== 1) {
+                await this._request(`/modify_objects.fcgi?session=${this.session}`, "POST", {
+                  object: "time_spans",
+                  values: {
+                    start: 0,
+                    end: 86399,
+                    sun: 1,
+                    mon: 1,
+                    tue: 1,
+                    wed: 1,
+                    thu: 1,
+                    fri: 1,
+                    sat: 1,
+                    hol1: 1,
+                    hol2: 1,
+                    hol3: 1
+                  },
+                  where: { time_spans: { id: ts.id } }
+                }).catch(() => null);
+              }
             }
           }
           const arRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
@@ -668,7 +671,33 @@ var require_client2 = __commonJS({
             await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
               object: "user_groups",
               values: missingUserGroups
+            }).catch(() => null);
+          }
+          try {
+            const uarRes = await this._request(`/load_objects.fcgi?session=${this.session}`, "POST", {
+              object: "user_access_rules"
             });
+            const userAccessRules = ((_j = uarRes.data) == null ? void 0 : _j.user_access_rules) || [];
+            const userIdsWithRule = new Set(userAccessRules.map((r) => r.user_id));
+            const missingUserRules = users.filter((u) => !userIdsWithRule.has(u.id)).map((u) => ({ user_id: u.id, access_rule_id: accessRuleId }));
+            if (missingUserRules.length > 0) {
+              console.log(`[Control iD] \u{1F4CB} Asignando regla 24/7 directa a ${missingUserRules.length} usuarios...`);
+              await this._request(`/create_objects.fcgi?session=${this.session}`, "POST", {
+                object: "user_access_rules",
+                values: missingUserRules
+              }).catch(() => null);
+            }
+          } catch (_) {
+          }
+          const ahoraSeg = Math.floor(Date.now() / 1e3);
+          for (const u of users) {
+            if (u.end_time > 0 && u.end_time < ahoraSeg) {
+              await this._request(`/modify_objects.fcgi?session=${this.session}`, "POST", {
+                object: "users",
+                values: { begin_time: 0, end_time: 0 },
+                where: { users: { id: u.id } }
+              }).catch(() => null);
+            }
           }
           console.log(`[Control iD] \u2705 Horario 00:00 a 23:59 (24/7) garantizado para los ${users.length} usuarios del t\xF3tem.`);
           return true;
@@ -704,6 +733,17 @@ var require_client2 = __commonJS({
           if (hour === 24) hour = 0;
           const minute = getVal("minute");
           const second = getVal("second");
+          try {
+            console.log("[Control iD] \u{1F310} Configurando NTP del t\xF3tem en UTC-3 (servidor: cl.pool.ntp.org)...");
+            await this._request(`/set_configuration.fcgi?session=${this.session}`, "POST", {
+              ntp: {
+                enabled: "1",
+                timezone: "UTC-3",
+                server: "cl.pool.ntp.org"
+              }
+            });
+          } catch (_) {
+          }
           console.log(`[Control iD] \u{1F552} Sincronizando reloj del t\xF3tem a America/Santiago: ${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}...`);
           await this._request(`/set_system_time.fcgi?session=${this.session}`, "POST", {
             day,
@@ -713,7 +753,7 @@ var require_client2 = __commonJS({
             minute,
             second
           });
-          console.log(`[Control iD] \u2705 Reloj del t\xF3tem sincronizado exitosamente con America/Santiago`);
+          console.log(`[Control iD] \u2705 Reloj y zona horaria del t\xF3tem sincronizados exitosamente`);
           return true;
         } catch (e) {
           console.error(`[Control iD] \u26A0\uFE0F Error sincronizando reloj del t\xF3tem:`, e.message);
