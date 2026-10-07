@@ -1,6 +1,35 @@
 const http = require('http');
 const EventEmitter = require('events');
 
+/**
+ * Convierte el timestamp numérico devuelto por Control iD (que representa la hora local de Chile)
+ * al ISO string UTC real, respetando el huso horario oficial de Chile (UTC-3 verano / UTC-4 invierno).
+ */
+function convertTotemTimeToISO(totemTimeSec) {
+  if (!totemTimeSec) return new Date().toISOString();
+  const d = new Date(totemTimeSec * 1000);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dia = String(d.getUTCDate()).padStart(2, '0');
+  const h = String(d.getUTCHours()).padStart(2, '0');
+  const min = String(d.getUTCMinutes()).padStart(2, '0');
+  const s = String(d.getUTCSeconds()).padStart(2, '0');
+
+  // Determinar offset dinámico de Chile (America/Santiago) para esa fecha
+  const testDate = new Date(Date.UTC(y, d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()));
+  const santiagoString = testDate.toLocaleString('en-US', { timeZone: 'America/Santiago', timeZoneName: 'shortOffset' });
+  const match = santiagoString.match(/GMT([+-]?\d+)/);
+  let offset = '-03:00';
+  if (match) {
+    const num = parseInt(match[1], 10);
+    const sign = num >= 0 ? '+' : '-';
+    offset = sign + String(Math.abs(num)).padStart(2, '0') + ':00';
+  }
+
+  const isoChile = `${y}-${m}-${dia}T${h}:${min}:${s}${offset}`;
+  return new Date(isoChile).toISOString();
+}
+
 class ControlIDClient extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -208,7 +237,7 @@ class ControlIDClient extends EventEmitter {
           nuevos.reverse().forEach(log => {
             // event 7 = Identificado/Autorizado, event 3 = Desconocido
             const userId = String(log.user_id || log.card_value || '0');
-            const timestamp = new Date((log.time || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+            const timestamp = log.time ? convertTotemTimeToISO(log.time) : new Date().toISOString();
             console.log(`[Control iD] 🔔 Evento detectado: ID #${log.id} — Usuario ZK: ${userId} (evento: ${log.event})`);
             this.emit('verify', userId, timestamp);
           });
@@ -285,7 +314,7 @@ class ControlIDClient extends EventEmitter {
         logId: l.id,
         zkId: String(l.user_id || l.card_value || '0'),
         event: l.event,
-        timestamp: new Date(l.time * 1000).toISOString()
+        timestamp: convertTotemTimeToISO(l.time)
       }));
     } catch (e) {
       console.error(`[Control iD] Error obteniendo historial completo:`, e.message);
@@ -318,7 +347,7 @@ class ControlIDClient extends EventEmitter {
         logId: l.id,
         zkId: String(l.user_id || l.card_value || '0'),
         event: l.event,
-        timestamp: new Date(l.time * 1000).toISOString()
+        timestamp: convertTotemTimeToISO(l.time)
       }));
     } catch (e) {
       console.warn(`[Control iD] Aviso en obtenerHistorialDelta:`, e.message);

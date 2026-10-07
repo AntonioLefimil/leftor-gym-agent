@@ -99,6 +99,27 @@ var require_client2 = __commonJS({
   "src/controlid/client.js"(exports2, module2) {
     var http = require("http");
     var EventEmitter = require("events");
+    function convertTotemTimeToISO(totemTimeSec) {
+      if (!totemTimeSec) return (/* @__PURE__ */ new Date()).toISOString();
+      const d = new Date(totemTimeSec * 1e3);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dia = String(d.getUTCDate()).padStart(2, "0");
+      const h = String(d.getUTCHours()).padStart(2, "0");
+      const min = String(d.getUTCMinutes()).padStart(2, "0");
+      const s = String(d.getUTCSeconds()).padStart(2, "0");
+      const testDate = new Date(Date.UTC(y, d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()));
+      const santiagoString = testDate.toLocaleString("en-US", { timeZone: "America/Santiago", timeZoneName: "shortOffset" });
+      const match = santiagoString.match(/GMT([+-]?\d+)/);
+      let offset = "-03:00";
+      if (match) {
+        const num = parseInt(match[1], 10);
+        const sign = num >= 0 ? "+" : "-";
+        offset = sign + String(Math.abs(num)).padStart(2, "0") + ":00";
+      }
+      const isoChile = `${y}-${m}-${dia}T${h}:${min}:${s}${offset}`;
+      return new Date(isoChile).toISOString();
+    }
     var ControlIDClient2 = class extends EventEmitter {
       constructor(config2 = {}) {
         super();
@@ -272,7 +293,7 @@ var require_client2 = __commonJS({
               this.lastLogId = Math.max(...nuevos.map((l) => l.id));
               nuevos.reverse().forEach((log) => {
                 const userId = String(log.user_id || log.card_value || "0");
-                const timestamp = new Date((log.time || Math.floor(Date.now() / 1e3)) * 1e3).toISOString();
+                const timestamp = log.time ? convertTotemTimeToISO(log.time) : (/* @__PURE__ */ new Date()).toISOString();
                 console.log(`[Control iD] \u{1F514} Evento detectado: ID #${log.id} \u2014 Usuario ZK: ${userId} (evento: ${log.event})`);
                 this.emit("verify", userId, timestamp);
               });
@@ -338,7 +359,7 @@ var require_client2 = __commonJS({
             logId: l.id,
             zkId: String(l.user_id || l.card_value || "0"),
             event: l.event,
-            timestamp: new Date(l.time * 1e3).toISOString()
+            timestamp: convertTotemTimeToISO(l.time)
           }));
         } catch (e) {
           console.error(`[Control iD] Error obteniendo historial completo:`, e.message);
@@ -367,7 +388,7 @@ var require_client2 = __commonJS({
             logId: l.id,
             zkId: String(l.user_id || l.card_value || "0"),
             event: l.event,
-            timestamp: new Date(l.time * 1e3).toISOString()
+            timestamp: convertTotemTimeToISO(l.time)
           }));
         } catch (e) {
           console.warn(`[Control iD] Aviso en obtenerHistorialDelta:`, e.message);
@@ -9678,7 +9699,7 @@ var require_gateway = __commonJS({
       /**
        * Consulta al servidor si el socio tiene acceso permitido
        */
-      async verificarAcceso(zkId) {
+      async verificarAcceso(zkId, timestamp = null) {
         return new Promise((resolve) => {
           if (!this.isConnected || !this.socket) {
             return resolve({ online: false });
@@ -9700,7 +9721,7 @@ var require_gateway = __commonJS({
             }
           };
           this.socket.on("accessResponse", onAccessResponse);
-          this.socket.emit("accessRequest", { zkId, timestamp: (/* @__PURE__ */ new Date()).toISOString() }, (ackRes) => {
+          this.socket.emit("accessRequest", { zkId, timestamp: timestamp || (/* @__PURE__ */ new Date()).toISOString() }, (ackRes) => {
             if (!settled && ackRes) {
               settled = true;
               clearTimeout(timeout);
@@ -9741,7 +9762,6 @@ var require_gateway = __commonJS({
           this.socket.emit("importHistory", { records: eventos }, (ack) => {
             if (ack) onResult(ack);
           });
-          this.socket.emit("syncOfflineEvents", { records: eventos });
         });
       }
       /**
@@ -10067,7 +10087,7 @@ hardwareClient.on("verify", async (userId, timestamp) => {
   let validadoOnline = false;
   if (gateway.isConnected) {
     try {
-      const resp = await gateway.verificarAcceso(userId);
+      const resp = await gateway.verificarAcceso(userId, timestamp);
       if (resp && resp.online) {
         validadoOnline = true;
         accesoPermitido = Boolean(resp.permitido);

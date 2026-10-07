@@ -243,7 +243,7 @@ hardwareClient.on('verify', async (userId, timestamp) => {
   // 1. Intentar validar en la nube en tiempo real
   if (gateway.isConnected) {
     try {
-      const resp = await gateway.verificarAcceso(userId);
+      const resp = await gateway.verificarAcceso(userId, timestamp);
       if (resp && resp.online) {
         validadoOnline = true;
         accesoPermitido = Boolean(resp.permitido);
