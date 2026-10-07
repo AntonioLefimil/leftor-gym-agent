@@ -132,11 +132,10 @@ class GatewayClient extends EventEmitter {
 
       this.socket.on('importHistoryResult', onResult);
 
-      // Emitir importHistory (soportado nativamente por el backend)
+      // Emitir importHistory con confirmación única (evita duplicidad)
       this.socket.emit('importHistory', { records: eventos }, (ack) => {
         if (ack) onResult(ack);
       });
-      this.socket.emit('syncOfflineEvents', { records: eventos });
     });
   }
 
