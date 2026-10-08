@@ -108,14 +108,22 @@ var require_client2 = __commonJS({
       const h = String(d.getUTCHours()).padStart(2, "0");
       const min = String(d.getUTCMinutes()).padStart(2, "0");
       const s = String(d.getUTCSeconds()).padStart(2, "0");
-      const testDate = new Date(Date.UTC(y, d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()));
-      const santiagoString = testDate.toLocaleString("en-US", { timeZone: "America/Santiago", timeZoneName: "shortOffset" });
-      const match = santiagoString.match(/GMT([+-]?\d+)/);
-      let offset = "-03:00";
-      if (match) {
-        const num = parseInt(match[1], 10);
-        const sign = num >= 0 ? "+" : "-";
-        offset = sign + String(Math.abs(num)).padStart(2, "0") + ":00";
+      let offset = "-04:00";
+      try {
+        const testDate = new Date(Date.UTC(y, d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()));
+        const santiagoString = testDate.toLocaleString("en-US", { timeZone: "America/Santiago", timeZoneName: "short" });
+        const match = santiagoString.match(/GMT([+-]?\d+)/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          const sign = num >= 0 ? "+" : "-";
+          offset = sign + String(Math.abs(num)).padStart(2, "0") + ":00";
+        } else {
+          const monthNum = d.getUTCMonth() + 1;
+          offset = monthNum >= 5 && monthNum <= 8 ? "-04:00" : "-03:00";
+        }
+      } catch (_) {
+        const monthNum = d.getUTCMonth() + 1;
+        offset = monthNum >= 5 && monthNum <= 8 ? "-04:00" : "-03:00";
       }
       const isoChile = `${y}-${m}-${dia}T${h}:${min}:${s}${offset}`;
       return new Date(isoChile).toISOString();
