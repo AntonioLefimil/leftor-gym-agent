@@ -81,7 +81,7 @@ async function run() {
     for (const log of logs) {
       const dRaw = new Date(log.time * 1000);
       const diaStr = `${dRaw.getUTCFullYear()}-${String(dRaw.getUTCMonth() + 1).padStart(2, '0')}-${String(dRaw.getUTCDate()).padStart(2, '0')}`;
-      if (diaStr === '2026-07-15' || diaStr === '2026-07-02' || diaStr === '2026-07-01') {
+      if (diaStr === '2026-10-06' || diaStr === '2026-10-07' || diaStr === '2026-07-15' || diaStr === '2026-07-02') {
         targetLogs.push(log);
       }
     }
