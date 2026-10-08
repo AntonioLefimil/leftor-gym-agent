@@ -63,7 +63,7 @@ class GatewayClient extends EventEmitter {
   /**
    * Consulta al servidor si el socio tiene acceso permitido
    */
-  async verificarAcceso(zkId, timestamp = null) {
+  async verificarAcceso(zkId, timestamp = null, horaTotem = null) {
     return new Promise((resolve) => {
       if (!this.isConnected || !this.socket) {
         return resolve({ online: false });
@@ -89,7 +89,7 @@ class GatewayClient extends EventEmitter {
 
       this.socket.on('accessResponse', onAccessResponse);
 
-      this.socket.emit('accessRequest', { zkId, timestamp: timestamp || new Date().toISOString() }, (ackRes) => {
+      this.socket.emit('accessRequest', { zkId, timestamp: timestamp || new Date().toISOString(), horaTotem }, (ackRes) => {
         if (!settled && ackRes) {
           settled = true;
           clearTimeout(timeout);

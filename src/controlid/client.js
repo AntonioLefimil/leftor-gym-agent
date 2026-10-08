@@ -38,6 +38,21 @@ function convertTotemTimeToISO(totemTimeSec) {
   return new Date(isoChile).toISOString();
 }
 
+/**
+ * Formatea la fecha y hora original tal como está grabada en el hardware del molinete
+ */
+function formatTotemRawTime(totemTimeSec) {
+  if (!totemTimeSec) return null;
+  const d = new Date(totemTimeSec * 1000);
+  const dia = String(d.getUTCDate()).padStart(2, '0');
+  const mes = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const y = d.getUTCFullYear();
+  const h = String(d.getUTCHours()).padStart(2, '0');
+  const min = String(d.getUTCMinutes()).padStart(2, '0');
+  const s = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${dia}/${mes}/${y} ${h}:${min}:${s}`;
+}
+
 class ControlIDClient extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -246,8 +261,9 @@ class ControlIDClient extends EventEmitter {
             // event 7 = Identificado/Autorizado, event 3 = Desconocido
             const userId = String(log.user_id || log.card_value || '0');
             const timestamp = log.time ? convertTotemTimeToISO(log.time) : new Date().toISOString();
-            console.log(`[Control iD] 🔔 Evento detectado: ID #${log.id} — Usuario ZK: ${userId} (evento: ${log.event})`);
-            this.emit('verify', userId, timestamp);
+            const horaTotem = formatTotemRawTime(log.time);
+            console.log(`[Control iD] 🔔 Evento detectado: ID #${log.id} — Usuario ZK: ${userId} (evento: ${log.event}) — Hora Tótem: ${horaTotem}`);
+            this.emit('verify', userId, timestamp, horaTotem);
           });
         }
       }
@@ -322,7 +338,8 @@ class ControlIDClient extends EventEmitter {
         logId: l.id,
         zkId: String(l.user_id || l.card_value || '0'),
         event: l.event,
-        timestamp: convertTotemTimeToISO(l.time)
+        timestamp: convertTotemTimeToISO(l.time),
+        horaTotem: formatTotemRawTime(l.time)
       }));
     } catch (e) {
       console.error(`[Control iD] Error obteniendo historial completo:`, e.message);
@@ -355,7 +372,8 @@ class ControlIDClient extends EventEmitter {
         logId: l.id,
         zkId: String(l.user_id || l.card_value || '0'),
         event: l.event,
-        timestamp: convertTotemTimeToISO(l.time)
+        timestamp: convertTotemTimeToISO(l.time),
+        horaTotem: formatTotemRawTime(l.time)
       }));
     } catch (e) {
       console.warn(`[Control iD] Aviso en obtenerHistorialDelta:`, e.message);

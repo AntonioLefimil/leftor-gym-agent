@@ -128,6 +128,17 @@ var require_client2 = __commonJS({
       const isoChile = `${y}-${m}-${dia}T${h}:${min}:${s}${offset}`;
       return new Date(isoChile).toISOString();
     }
+    function formatTotemRawTime(totemTimeSec) {
+      if (!totemTimeSec) return null;
+      const d = new Date(totemTimeSec * 1e3);
+      const dia = String(d.getUTCDate()).padStart(2, "0");
+      const mes = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const y = d.getUTCFullYear();
+      const h = String(d.getUTCHours()).padStart(2, "0");
+      const min = String(d.getUTCMinutes()).padStart(2, "0");
+      const s = String(d.getUTCSeconds()).padStart(2, "0");
+      return `${dia}/${mes}/${y} ${h}:${min}:${s}`;
+    }
     var ControlIDClient2 = class extends EventEmitter {
       constructor(config2 = {}) {
         super();
@@ -302,8 +313,9 @@ var require_client2 = __commonJS({
               nuevos.reverse().forEach((log) => {
                 const userId = String(log.user_id || log.card_value || "0");
                 const timestamp = log.time ? convertTotemTimeToISO(log.time) : (/* @__PURE__ */ new Date()).toISOString();
-                console.log(`[Control iD] \u{1F514} Evento detectado: ID #${log.id} \u2014 Usuario ZK: ${userId} (evento: ${log.event})`);
-                this.emit("verify", userId, timestamp);
+                const horaTotem = formatTotemRawTime(log.time);
+                console.log(`[Control iD] \u{1F514} Evento detectado: ID #${log.id} \u2014 Usuario ZK: ${userId} (evento: ${log.event}) \u2014 Hora T\xF3tem: ${horaTotem}`);
+                this.emit("verify", userId, timestamp, horaTotem);
               });
             }
           }
@@ -367,7 +379,8 @@ var require_client2 = __commonJS({
             logId: l.id,
             zkId: String(l.user_id || l.card_value || "0"),
             event: l.event,
-            timestamp: convertTotemTimeToISO(l.time)
+            timestamp: convertTotemTimeToISO(l.time),
+            horaTotem: formatTotemRawTime(l.time)
           }));
         } catch (e) {
           console.error(`[Control iD] Error obteniendo historial completo:`, e.message);
@@ -396,7 +409,8 @@ var require_client2 = __commonJS({
             logId: l.id,
             zkId: String(l.user_id || l.card_value || "0"),
             event: l.event,
-            timestamp: convertTotemTimeToISO(l.time)
+            timestamp: convertTotemTimeToISO(l.time),
+            horaTotem: formatTotemRawTime(l.time)
           }));
         } catch (e) {
           console.warn(`[Control iD] Aviso en obtenerHistorialDelta:`, e.message);
@@ -9707,7 +9721,7 @@ var require_gateway = __commonJS({
       /**
        * Consulta al servidor si el socio tiene acceso permitido
        */
-      async verificarAcceso(zkId, timestamp = null) {
+      async verificarAcceso(zkId, timestamp = null, horaTotem = null) {
         return new Promise((resolve) => {
           if (!this.isConnected || !this.socket) {
             return resolve({ online: false });
@@ -9729,7 +9743,7 @@ var require_gateway = __commonJS({
             }
           };
           this.socket.on("accessResponse", onAccessResponse);
-          this.socket.emit("accessRequest", { zkId, timestamp: timestamp || (/* @__PURE__ */ new Date()).toISOString() }, (ackRes) => {
+          this.socket.emit("accessRequest", { zkId, timestamp: timestamp || (/* @__PURE__ */ new Date()).toISOString(), horaTotem }, (ackRes) => {
             if (!settled && ackRes) {
               settled = true;
               clearTimeout(timeout);
@@ -10081,10 +10095,10 @@ gateway.on("configurarTotem", async (data, ack) => {
     }
   }
 });
-hardwareClient.on("verify", async (userId, timestamp) => {
+hardwareClient.on("verify", async (userId, timestamp, horaTotem) => {
   console.log(`
 ----------------------------------------------------`);
-  console.log(`\u{1F50D} [Lector Molinete] Verificaci\xF3n detectada para: ${userId}`);
+  console.log(`\u{1F50D} [Lector Molinete] Verificaci\xF3n detectada para: ${userId} \u2014 Hora T\xF3tem: ${horaTotem || "N/A"}`);
   if (modoPasoLibreHasta && Date.now() < modoPasoLibreHasta) {
     console.log(`[Main] \u23F1\uFE0F Paso Libre Temporal activo \u2014 Destrabando torniquete sin restricciones`);
     hardwareClient.abrirMolinete();
@@ -10095,7 +10109,7 @@ hardwareClient.on("verify", async (userId, timestamp) => {
   let validadoOnline = false;
   if (gateway.isConnected) {
     try {
-      const resp = await gateway.verificarAcceso(userId, timestamp);
+      const resp = await gateway.verificarAcceso(userId, timestamp, horaTotem);
       if (resp && resp.online) {
         validadoOnline = true;
         accesoPermitido = Boolean(resp.permitido);

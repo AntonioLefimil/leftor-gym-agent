@@ -225,9 +225,9 @@ gateway.on('configurarTotem', async (data, ack) => {
 });
 
 // ─── Eventos del Molinete (Hardware Local) ────────────────────
-hardwareClient.on('verify', async (userId, timestamp) => {
+hardwareClient.on('verify', async (userId, timestamp, horaTotem) => {
   console.log(`\n----------------------------------------------------`);
-  console.log(`🔍 [Lector Molinete] Verificación detectada para: ${userId}`);
+  console.log(`🔍 [Lector Molinete] Verificación detectada para: ${userId} — Hora Tótem: ${horaTotem || 'N/A'}`);
 
   // Si está activo el modo paso libre temporal, abrir de inmediato
   if (modoPasoLibreHasta && Date.now() < modoPasoLibreHasta) {
@@ -243,7 +243,7 @@ hardwareClient.on('verify', async (userId, timestamp) => {
   // 1. Intentar validar en la nube en tiempo real
   if (gateway.isConnected) {
     try {
-      const resp = await gateway.verificarAcceso(userId, timestamp);
+      const resp = await gateway.verificarAcceso(userId, timestamp, horaTotem);
       if (resp && resp.online) {
         validadoOnline = true;
         accesoPermitido = Boolean(resp.permitido);
