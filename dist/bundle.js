@@ -439,10 +439,10 @@ var require_client2 = __commonJS({
           const nombreCompleto = `${socio.nombre || ""} ${socio.apellido || ""}`.trim() || "Socio";
           const registration = socio.rut || "";
           const ahoraSeg = Math.floor(Date.now() / 1e3);
-          let beginTime = ahoraSeg;
-          let endTime = socio.vencimiento ? Math.floor(new Date(socio.vencimiento).getTime() / 1e3) : ahoraSeg + 30 * 86400;
+          let beginTime = 0;
+          let endTime = socio.vencimiento ? Math.floor(new Date(socio.vencimiento).getTime() / 1e3) : 0;
           if (socio.estado === "INACTIVO" || socio.estado === "SUSPENDIDO") {
-            endTime = ahoraSeg - 1;
+            endTime = 1;
           }
           let userIdEnTotem = socio.zkId ? parseInt(socio.zkId) : null;
           if (!userIdEnTotem && registration) {
@@ -733,14 +733,29 @@ var require_client2 = __commonJS({
           } catch (_) {
           }
           const ahoraSeg = Math.floor(Date.now() / 1e3);
+          let corregidos = 0;
           for (const u of users) {
-            if (u.end_time > 0 && u.end_time < ahoraSeg) {
+            let needsUpdate = false;
+            const updateVals = {};
+            if (u.begin_time && u.begin_time > 0) {
+              updateVals.begin_time = 0;
+              needsUpdate = true;
+            }
+            if (u.end_time && u.end_time > 0 && u.end_time < ahoraSeg) {
+              updateVals.end_time = 0;
+              needsUpdate = true;
+            }
+            if (needsUpdate) {
+              corregidos++;
               await this._request(`/modify_objects.fcgi?session=${this.session}`, "POST", {
                 object: "users",
-                values: { begin_time: 0, end_time: 0 },
+                values: updateVals,
                 where: { users: { id: u.id } }
               }).catch(() => null);
             }
+          }
+          if (corregidos > 0) {
+            console.log(`[Control iD] \u{1F513} ${corregidos} usuarios con fechas bloqueantes corregidos a begin_time: 0.`);
           }
           console.log(`[Control iD] \u2705 Horario 00:00 a 23:59 (24/7) garantizado para los ${users.length} usuarios del t\xF3tem.`);
           return true;

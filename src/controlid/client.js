@@ -404,13 +404,15 @@ class ControlIDClient extends EventEmitter {
       const registration = socio.rut || '';
 
       const ahoraSeg = Math.floor(Date.now() / 1000);
-      let beginTime = ahoraSeg;
+      // CRÍTICO: begin_time debe ser siempre 0. Un timestamp de Date.now() en UTC (+3h vs hora de Chile)
+      // hace que el tótem compare su reloj local con una hora futura y rechace al socio con "Acesso Negado".
+      let beginTime = 0;
       let endTime = socio.vencimiento
         ? Math.floor(new Date(socio.vencimiento).getTime() / 1000)
-        : ahoraSeg + (30 * 86400);
+        : 0;
 
       if (socio.estado === 'INACTIVO' || socio.estado === 'SUSPENDIDO') {
-        endTime = ahoraSeg - 1; // bloqueado/vencido
+        endTime = 1; // bloqueado/vencido en el hardware
       }
 
       // Buscar si el usuario ya existe por ID de tótem (zkId) o registration (RUT)
@@ -726,16 +728,36 @@ class ControlIDClient extends EventEmitter {
         }
       } catch (_) {}
 
-      // C) Limpiar restricciones de fecha expirada (end_time) en los usuarios del tótem
+      // C) Limpiar restricciones de fecha expirada (end_time) y fecha de inicio futura (begin_time) en los usuarios del tótem
       const ahoraSeg = Math.floor(Date.now() / 1000);
+      let corregidos = 0;
       for (const u of users) {
-        if (u.end_time > 0 && u.end_time < ahoraSeg) {
+        let needsUpdate = false;
+        const updateVals = {};
+
+        // Resetear begin_time a 0 si estaba en el futuro o mayor a 0
+        if (u.begin_time && u.begin_time > 0) {
+          updateVals.begin_time = 0;
+          needsUpdate = true;
+        }
+
+        // Limpiar end_time si ya expiró en el pasado
+        if (u.end_time && u.end_time > 0 && u.end_time < ahoraSeg) {
+          updateVals.end_time = 0;
+          needsUpdate = true;
+        }
+
+        if (needsUpdate) {
+          corregidos++;
           await this._request(`/modify_objects.fcgi?session=${this.session}`, 'POST', {
             object: 'users',
-            values: { begin_time: 0, end_time: 0 },
+            values: updateVals,
             where: { users: { id: u.id } }
           }).catch(() => null);
         }
+      }
+      if (corregidos > 0) {
+        console.log(`[Control iD] 🔓 ${corregidos} usuarios con fechas bloqueantes corregidos a begin_time: 0.`);
       }
 
       console.log(`[Control iD] ✅ Horario 00:00 a 23:59 (24/7) garantizado para los ${users.length} usuarios del tótem.`);
